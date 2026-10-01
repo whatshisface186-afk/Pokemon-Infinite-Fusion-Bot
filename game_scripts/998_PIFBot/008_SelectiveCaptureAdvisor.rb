@@ -13,6 +13,8 @@
 
 module PIFBot
   CAPTURE_REPORT_PATH = "Data/pif_bot_capture.txt"
+  CAPTURE_HISTORY_PATH = "Data/pif_bot_capture_history.txt"
+  @capture_history_seen_battles = {}
 
   def self.capture_known_move_ids(pkmn)
     key = battle_key_for(pkmn)
@@ -215,6 +217,38 @@ module PIFBot
     }
   end
 
+  def self.append_capture_history(battle, candidate, evaluation, total_balls)
+    @capture_history_seen_battles ||= {}
+    battle_key = battle.object_id
+    return if @capture_history_seen_battles[battle_key]
+    @capture_history_seen_battles[battle_key] = true
+
+    File.open(CAPTURE_HISTORY_PATH, "a") do |f|
+      fusion_delta = evaluation[:fusion] ? format("%+.2f", evaluation[:fusion_delta]) : "N/A"
+      new_types = evaluation[:new_types].length > 0 ? evaluation[:new_types].join(",") : "none"
+      f.write(
+        "#{Time.now} | #{safe_value("unknown") { candidate.name }} | " +
+        "#{safe_value("unknown") { candidate.species.inspect }} | " +
+        "Lv#{safe_value("?") { candidate.level }} | " +
+        "Types #{safe_value("unknown") { candidate.types.join(",") }} | " +
+        "score #{format("%.2f", evaluation[:candidate_score])} | " +
+        "best_owned #{format("%.2f", evaluation[:best_owned_score])} | " +
+        "direct_delta #{format("%+.2f", evaluation[:direct_delta])} | " +
+        "new_types #{new_types} | fusion_delta #{fusion_delta} | " +
+        "worth #{evaluation[:worth_catching] ? "YES" : "NO"} | " +
+        "balls #{total_balls} | #{evaluation[:reasons].join("; ")}\n"
+      )
+    end
+  rescue Exception => e
+    begin
+      File.open("Data/pif_bot_capture_history_error.txt", "w") do |f|
+        f.write("#{e.class}: #{e.message}\n")
+        f.write(e.backtrace.join("\n")) if e.backtrace
+      end
+    rescue Exception
+    end
+  end
+
   def self.write_capture_report(battle)
     return if !battle
     return if !safe_value(false) { battle.wildBattle? }
@@ -228,6 +262,7 @@ module PIFBot
     evaluation = capture_evaluation(candidate)
     balls = ball_inventory
     total_balls = balls.inject(0) { |sum, entry| sum + entry[2] }
+    append_capture_history(battle, candidate, evaluation, total_balls)
 
     File.open(CAPTURE_REPORT_PATH, "w") do |f|
       f.write("Pokemon Infinite Fusion Bot - Selective Capture Advisor\n")
