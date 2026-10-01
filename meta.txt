@@ -1,0 +1,4 @@
+Name         = Pokemon Infinite Fusion Bot
+Version      = 0.1.0
+Link         = https://github.com/whatshisface186-afk/Pokemon-Infinite-Fusion-Bot
+Credits      = whatshisface186-afk
