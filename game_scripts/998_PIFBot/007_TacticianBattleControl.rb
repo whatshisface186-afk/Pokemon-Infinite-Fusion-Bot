@@ -340,7 +340,7 @@ module PIFBot
   # Autonomous control must answer that narrow forced-switch confirmation, or
   # the battle blocks before choose_tactician_replacement ever gets a chance.
   def self.forced_switch_confirmation?(msg)
-    text = msg.to_s.gsub(/[\\r\\n]+/, " ").strip
+    text = msg.to_s.gsub("\r", " ").gsub("\n", " ").strip
     return true if text == safe_value("Use next Pokémon?") { _INTL("Use next Pokémon?") }
     return true if text == "Use next Pokemon?"
     return false
@@ -403,7 +403,7 @@ class PokeBattle_Battle
       if PIFBot.tactician_auto_control? && PIFBot.forced_switch_confirmation?(msg)
         PIFBot.append_action_log(
           "FORCED_SWITCH_CONFIRM",
-          "auto YES | #{msg.to_s.gsub(/[\\r\\n]+/, " ")}"
+          "auto YES | #{msg.to_s.gsub("\r", " ").gsub("\n", " ")}"
         )
         return true
       end
