@@ -4,13 +4,14 @@
 # Goal: let the player load a save and hand off repetitive wild-encounter tests.
 #
 # Safety/initial scope:
-# - Never intentionally leaves the current map.
+# - Normal grinding stays on the starting map; an intentional Pokemon Center
+#   healing trip may cross connected maps and then return.
 # - Never intentionally steps onto map events/doors/NPCs.
 # - Uses the game's native movement/passability and normal step encounter logic.
 # - Counts wild battles only.
 # - Stops automatically after 10 wild battles.
-# - Stops if the party has no usable Pokemon, the map changes, no safe move
-#   exists, or a generous step safety limit is reached.
+# - Stops if the party has no usable Pokemon, an unexpected map change occurs,
+#   no safe move exists, or a generous step safety limit is reached.
 #
 # This is NOT story navigation yet. It is deliberately a small, testable
 # navigation layer for autonomous battle/capture-data collection.
@@ -486,7 +487,8 @@ module PIFBot
       f.write("Last stop reason: #{@nav_stop_reason || "none"}\n\n")
 
       f.write("Safety rules:\n")
-      f.write("  - stays on starting map\n")
+      f.write("  - normal grinding stays on starting map\n")
+      f.write("  - Pokemon Center trips may cross connected maps, then return\n")
       f.write("  - blocks destination tiles containing map events\n")
       f.write("  - avoids normal trainer/sight-event lines of sight\n")
       f.write("  - uses native passability/collision\n")
