@@ -332,9 +332,14 @@ module PIFBot
     list.each do |cmd|
       next if !cmd
       code = safe_value(-1) { cmd.code }
-      next if ![108, 408, 355, 655].include?(code)
-      params = safe_value([]) { cmd.parameters }
-      text.push(params[0].to_s) if params && params[0]
+      if [108, 408, 355, 655].include?(code)
+        params = safe_value([]) { cmd.parameters }
+        text.push(params[0].to_s) if params && params[0]
+      elsif code == 111
+        # Script conditional branch: parameters are [12, "script"].
+        params = safe_value([]) { cmd.parameters }
+        text.push(params[1].to_s) if params && params[0] == 12 && params[1]
+      end
     end
     return text.join("\n")
   rescue Exception
@@ -503,19 +508,36 @@ module PIFBot
 
     old_party = safe_value([]) { $Trainer.party }.dup
     selected_ids = selected.map { |entry| entry[:pokemon].object_id }
+    selected_pc = selected.select { |entry| entry[:where] == :pc }
+    displaced = old_party.reject { |pkmn| selected_ids.include?(pkmn.object_id) }
 
-    # Remove selected PC Pokemon from their box first. Those freed slots give us
-    # room to store displaced party Pokemon without releasing anything.
-    selected.each do |entry|
-      next if entry[:where] != :pc
+    # Preflight storage capacity BEFORE mutating anything. Selected PC slots will
+    # become free too. This guarantees a failed rebuild never loses a Pokemon.
+    free_slots = 0
+    for box in 0...$PokemonStorage.maxBoxes
+      for slot in 0...$PokemonStorage.maxPokemon(box)
+        free_slots += 1 if safe_value(nil) { $PokemonStorage[box, slot] }.nil?
+      end
+    end
+    capacity_after_withdraw = free_slots + selected_pc.length
+    if capacity_after_withdraw < displaced.length
+      append_action_log(
+        "CAMPAIGN_TEAM",
+        "rebuild skipped: PC lacks #{displaced.length - capacity_after_withdraw} safe storage slot(s)"
+      )
+      return false
+    end
+
+    selected_pc.each do |entry|
       $PokemonStorage.pbDelete(entry[:box], entry[:slot])
     end
 
-    old_party.each do |pkmn|
-      next if selected_ids.include?(pkmn.object_id)
+    displaced.each do |pkmn|
       stored = $PokemonStorage.pbStoreCaught(pkmn)
       if stored.nil? || stored < 0
-        append_action_log("CAMPAIGN_TEAM", "PC full while rebuilding; keeping current party")
+        # This should be impossible after preflight; stop rather than continue
+        # mutating the team if an unexpected storage rule disagrees.
+        append_action_log("CAMPAIGN_TEAM", "unexpected PC store failure during rebuild")
         return false
       end
     end
@@ -902,6 +924,27 @@ module PIFBot
     end
 
     return if [:travel_training, :travel_gym, :gym].include?(@campaign_phase)
+
+    # After a three-loss review determines that the owned roster has no
+    # materially different answer, catching new unique options is the objective
+    # even if the current party is already at the Gym level cap.
+    if campaign_expanding_roster?
+      if campaign_map_has_land_encounters?($game_map.map_id)
+        @campaign_phase = :training
+      else
+        @campaign_training_map = campaign_find_nearest_training_map
+        if !@campaign_training_map
+          navigation_stop("campaign_no_expansion_area_route")
+        elsif @campaign_training_map == $game_map.map_id
+          @campaign_phase = :training
+        elsif campaign_begin_route(@campaign_training_map, "travel to catch unique roster options")
+          @campaign_phase = :travel_training
+        else
+          navigation_stop("campaign_expansion_route_unreachable")
+        end
+      end
+      return
+    end
 
     if !campaign_team_ready?
       if campaign_map_has_land_encounters?($game_map.map_id)
