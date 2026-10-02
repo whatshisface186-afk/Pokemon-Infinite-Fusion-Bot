@@ -67,6 +67,8 @@ module PIFBot
       knowledge = BATTLE_KNOWLEDGE[key]
       observed_moves = knowledge ? knowledge[:moves] : []
       f.write("Observed moves: #{observed_moves.length > 0 ? observed_moves.join(", ") : "none yet"}\n")
+      blocked_names = respond_to?(:observed_blocked_move_names) ? observed_blocked_move_names(pkmn) : []
+      f.write("Own moves visibly blocked by opponent: #{blocked_names.length > 0 ? blocked_names.join(", ") : "none observed"}\n")
       f.write("Ability: hidden until revealed\n")
       f.write("Held item: hidden until revealed\n")
     else
