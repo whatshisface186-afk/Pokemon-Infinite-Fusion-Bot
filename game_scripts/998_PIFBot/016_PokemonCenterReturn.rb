@@ -36,6 +36,11 @@ module PIFBot
   @center_return_path = []
   @center_return_replans = 0
   @center_return_blocked_steps = {}
+  @center_plan_map_cache = {}
+  @center_transfer_edge_cache = {}
+  @center_transfer_lookup_cache = {}
+  @center_last_plan_ms = 0.0
+  @center_plan_map_loads = 0
 
   def self.center_return_active?
     return @center_return_active == true
@@ -116,6 +121,26 @@ module PIFBot
     append_action_log("ERROR", "record center: #{e.class}: #{e.message}")
   end
 
+  def self.center_reset_plan_cache
+    @center_plan_map_cache = {}
+    @center_transfer_edge_cache = {}
+    @center_transfer_lookup_cache = {}
+    @center_plan_map_loads = 0
+  end
+
+  def self.center_map_for_plan(map_id)
+    return $game_map if $game_map && $game_map.map_id == map_id
+    @center_plan_map_cache ||= {}
+    return @center_plan_map_cache[map_id] if @center_plan_map_cache.has_key?(map_id)
+
+    map = safe_value(nil) { $MapFactory.getMapNoAdd(map_id) }
+    @center_plan_map_cache[map_id] = map
+    @center_plan_map_loads = (@center_plan_map_loads || 0) + 1 if map
+    return map
+  rescue Exception
+    return nil
+  end
+
   def self.center_event_transfer(event)
     return nil if !event
     trigger = safe_value(-1) { event.trigger }
@@ -155,7 +180,10 @@ module PIFBot
   end
 
   def self.center_transfer_edges(map_id)
-    map = safe_value(nil) { $MapFactory.getMapNoAdd(map_id) }
+    @center_transfer_edge_cache ||= {}
+    return @center_transfer_edge_cache[map_id] if @center_transfer_edge_cache.has_key?(map_id)
+
+    map = center_map_for_plan(map_id)
     return [] if !map
 
     ret = []
@@ -163,6 +191,7 @@ module PIFBot
       edge = center_event_transfer(event)
       ret.push(edge) if edge
     end
+    @center_transfer_edge_cache[map_id] = ret
     return ret
   rescue Exception
     return []
@@ -170,14 +199,18 @@ module PIFBot
 
   def self.center_transfer_at(map, x, y)
     return nil if !map
-    safe_value({}) { map.events }.each_value do |event|
-      next if !event
-      on_tile = safe_value(false) { event.at_coordinate?(x, y) }
-      next if !on_tile
-      edge = center_event_transfer(event)
-      return edge if edge
+    map_id = safe_value(nil) { map.map_id }
+    return nil if !map_id
+
+    @center_transfer_lookup_cache ||= {}
+    unless @center_transfer_lookup_cache.has_key?(map_id)
+      lookup = {}
+      center_transfer_edges(map_id).each do |edge|
+        lookup["#{edge[:event_x]},#{edge[:event_y]}"] = edge
+      end
+      @center_transfer_lookup_cache[map_id] = lookup
     end
-    return nil
+    return @center_transfer_lookup_cache[map_id]["#{x},#{y}"]
   rescue Exception
     return nil
   end
@@ -266,7 +299,7 @@ module PIFBot
   end
 
   def self.center_connected_destination(map_id, raw_x, raw_y)
-    map = safe_value(nil) { $MapFactory.getMapNoAdd(map_id) }
+    map = safe_value(nil) { center_map_for_plan(map_id) }
     return nil if !map
     return [map_id, raw_x, raw_y] if map.valid?(raw_x, raw_y)
 
@@ -311,7 +344,7 @@ module PIFBot
     return nil if center_step_blocked?(state, direction)
 
     map_id, x, y = state
-    map = safe_value(nil) { $MapFactory.getMapNoAdd(map_id) }
+    map = safe_value(nil) { center_map_for_plan(map_id) }
     return nil if !map
 
     raw_x = x + (direction == 6 ? 1 : direction == 4 ? -1 : 0)
@@ -327,7 +360,7 @@ module PIFBot
       if transfer
         logical = [transfer[:map_id], transfer[:x], transfer[:y]]
         return nil if !allowed_maps.include?(logical[0])
-        target_map = safe_value(nil) { $MapFactory.getMapNoAdd(logical[0]) }
+        target_map = safe_value(nil) { center_map_for_plan(logical[0]) }
         return nil if !target_map
         return nil if !safe_value(false) { target_map.valid?(logical[1], logical[2]) }
         return logical
@@ -346,7 +379,7 @@ module PIFBot
     return nil if !dest
     return nil if !allowed_maps.include?(dest[0])
 
-    dest_map = safe_value(nil) { $MapFactory.getMapNoAdd(dest[0]) }
+    dest_map = safe_value(nil) { center_map_for_plan(dest[0]) }
     return nil if !dest_map
 
     # Match Infinite Fusion's actual edge movement rules. Game_Player#passable?
@@ -433,6 +466,8 @@ module PIFBot
     candidates = known_centers
     return nil if candidates.length == 0
 
+    center_reset_plan_cache
+    started_at = Time.now.to_f
     reachable = []
     candidates.each do |center|
       path = plan_center_path(center)
@@ -456,6 +491,12 @@ module PIFBot
     pool = actual_centers.length > 0 ? actual_centers : reachable
 
     pool.sort_by! { |entry| entry[:distance] }
+    @center_last_plan_ms = (Time.now.to_f - started_at) * 1000.0
+    append_action_log(
+      "CENTER_PLAN",
+      "#{format("%.1f", @center_last_plan_ms)} ms | loaded #{@center_plan_map_loads || 0} off-current maps | " +
+      "selected #{pool[0][:distance]} steps to map #{pool[0][:center][:map_id]}"
+    )
     return pool[0]
   rescue Exception
     return nil
@@ -584,6 +625,7 @@ module PIFBot
     @center_return_path = []
     @center_return_replans = 0
     @center_return_blocked_steps = {}
+    center_reset_plan_cache
     navigation_write_status("pokemon_center_trip_complete")
     write_debug_report("center_return_complete") if respond_to?(:write_debug_report)
   end
@@ -701,7 +743,12 @@ Events.onMapUpdate += proc { |_sender, _event_data|
 }
 
 Events.onMapChange += proc { |_sender, _event_data|
+  # Keep the remaining logical route. Transfer/seamless-crossing steps are
+  # already represented in the planned direction list, so discarding it here
+  # caused an expensive full BFS after every loading screen. If a transition
+  # lands somewhere unexpected, the normal runtime blocked-step recovery will
+  # replan only when movement actually fails.
   if PIFBot.center_return_active?
-    PIFBot.instance_variable_set(:@center_return_path, [])
+    PIFBot.navigation_write_status("center_map_change") if PIFBot.respond_to?(:navigation_write_status)
   end
 }
