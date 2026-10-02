@@ -236,6 +236,27 @@ module PIFBot
     end
   end
 
+  def self.debug_ball_restock_section(file)
+    debug_write_heading(file, "POKE BALL RESTOCK STATE")
+    file.write("Active: #{debug_safe(false) { respond_to?(:campaign_ball_restock_active?) && campaign_ball_restock_active? }}\n")
+    file.write("Phase: #{debug_safe("none") { instance_variable_get(:@campaign_ball_restock_phase) || "none" }}\n")
+    file.write("Usable capture balls: #{debug_safe("?") { respond_to?(:campaign_ball_count) ? campaign_ball_count : "?" }}\n")
+    file.write("Trigger / target: #{debug_safe("?") { CAMPAIGN_BALL_RESTOCK_TRIGGER }}/#{debug_safe("?") { CAMPAIGN_BALL_RESTOCK_TARGET }}\n")
+    file.write("Trainer money: $#{debug_safe("?") { $Trainer ? $Trainer.money : "?" }}\n")
+    file.write("Resume map: #{debug_safe("none") { instance_variable_get(:@campaign_ball_restock_resume_map) || "none" }}\n")
+    file.write("Mart map: #{debug_safe("none") { instance_variable_get(:@campaign_ball_restock_mart_map) || "none" }}\n")
+    file.write("Target event: #{debug_safe("none") { instance_variable_get(:@campaign_ball_restock_event_id) || "none" }}\n")
+    file.write("Event path remaining: #{debug_safe([]) { instance_variable_get(:@campaign_ball_restock_path) || [] }.length}\n")
+    tried = debug_safe({}) { instance_variable_get(:@campaign_ball_restock_tried_shop_events) || {} }
+    file.write("Clerk events tried: #{tried.keys.sort.join(",")}\n")
+    file.write("Blocked money snapshot: #{debug_safe("none") { instance_variable_get(:@campaign_ball_restock_blocked_money) || "none" }}\n")
+    file.write("Next retry after wild battle: #{debug_safe(0) { instance_variable_get(:@campaign_ball_restock_next_retry_battle) || 0 }}\n")
+    file.write("Last result: #{debug_safe("none") { instance_variable_get(:@campaign_ball_restock_last_result) || "none" }}\n")
+    file.write("Last purchase item: #{debug_safe("none") { instance_variable_get(:@campaign_ball_restock_last_item) || "none" }}\n")
+    file.write("Last purchase quantity: #{debug_safe(0) { instance_variable_get(:@campaign_ball_restock_last_quantity) || 0 }}\n")
+    file.write("Last spent: $#{debug_safe(0) { instance_variable_get(:@campaign_ball_restock_last_spent) || 0 }}\n")
+  end
+
   def self.debug_party_section(file)
     debug_write_heading(file, "PARTY")
     party = debug_safe([]) { $Trainer ? $Trainer.party : [] }
@@ -415,6 +436,7 @@ module PIFBot
       debug_runtime_section(file, reason)
       debug_navigation_section(file)
       debug_center_section(file)
+      debug_ball_restock_section(file)
       debug_party_section(file)
       debug_inventory_section(file)
       debug_nearby_events_section(file)
