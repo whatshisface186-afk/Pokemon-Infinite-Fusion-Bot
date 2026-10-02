@@ -8,6 +8,7 @@
 # - Automatically chooses and registers legal moves using Tactician's
 #   player-knowledge decision advisor.
 # - Automatically chooses a legal replacement after a faint/forced switch.
+# - Runs from wild battles when no legal move can deal visible direct damage.
 # - Does NOT yet make voluntary tactical switches, use bag items, catch Pokemon,
 #   or make fusion/team-management decisions.
 #
@@ -129,6 +130,43 @@ module PIFBot
           ])
         end
       end
+    end
+
+    # If this is a wild battle and Tactician has no legal move that can
+    # currently deal visible direct damage, running is better than endlessly
+    # spending turns on Leer/other status moves. This uses only the same
+    # player-knowledge matchup information as the decision advisor.
+    damage_candidates = candidates.select do |entry|
+      advice = entry[0]
+      advice[:expected_damage] && advice[:expected_damage] > 0.0 &&
+        (!advice[:type_mult] || advice[:type_mult] > 0.0)
+    end
+
+    if safe_value(false) { battle.wildBattle? } &&
+       visible_opponent &&
+       damage_candidates.length == 0
+      opponent_name = safe_value("unknown") { visible_opponent.name }
+      append_action_log(
+        "RUN",
+        "#{safe_value("unknown") { user.name }} -> no usable damaging move against #{opponent_name}; attempting escape"
+      )
+
+      run_result = safe_value(0) { battle.pbRun(idx_battler) }
+      if run_result != 0
+        append_action_log(
+          "RUN",
+          "escape attempt resolved | result #{run_result}"
+        )
+        return true
+      end
+
+      # A hard trapping effect can make pbRun return 0 without consuming the
+      # turn. In that case fall through to the best legal non-damaging action
+      # rather than hanging the command phase.
+      append_action_log(
+        "RUN",
+        "escape unavailable/trapped; falling back to legal move"
+      )
     end
 
     if candidates.length == 0
