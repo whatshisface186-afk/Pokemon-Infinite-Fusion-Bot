@@ -143,6 +143,96 @@ module PIFBot
     return best
   end
 
+  # A visible wild fusion can still be strategically valuable even if the
+  # fusion itself is weak. Infinite Fusion exposes the head/body identities to
+  # the player, so Tactician may value either half as future fusion material.
+  #
+  # This is deliberately more selective than direct catches because realizing
+  # this value requires later unfusing/re-fusing and therefore extra resources.
+  def self.fusion_component_opportunity(candidate_pkmn)
+    return nil if !candidate_pkmn
+    return nil if !safe_value(false) { candidate_pkmn.isFusion? }
+
+    components = []
+    begin
+      body_data = candidate_pkmn.get_body_species
+      components.push(["body", body_data]) if body_data
+    rescue Exception
+    end
+    begin
+      head_data = candidate_pkmn.get_head_species
+      components.push(["head", head_data]) if head_data
+    rescue Exception
+    end
+    return nil if components.length == 0
+
+    best = nil
+    candidate_level = safe_value(1) { candidate_pkmn.level }
+
+    components.each do |component_entry|
+      role = component_entry[0]
+      component = component_entry[1]
+      component_score = species_strategy_score(component, candidate_level, [])
+
+      # Record the component by itself as a future roster asset.
+      entry = {
+        :component_role => role,
+        :component => component,
+        :component_score => component_score,
+        :fusion_score => nil,
+        :fusion_species => nil,
+        :partner => nil,
+        :orientation => nil
+      }
+      best = entry if !best || component_score > best[:component_score]
+
+      # Also test fusing the visible component with each currently owned
+      # unfused Pokémon in both orientations.
+      tactician_owned_pokemon.each do |owned_entry|
+        partner = owned_entry[0]
+        next if !partner
+        next if safe_value(false) { partner.isFusion? }
+
+        [
+          [partner.species, component.species, "owned body + captured #{role} head"],
+          [component.species, partner.species, "captured #{role} body + owned head"]
+        ].each do |fusion_def|
+          begin
+            fused_data = getFusionSpecies(fusion_def[0], fusion_def[1])
+            fusion_score = species_strategy_score(
+              fused_data,
+              [safe_value(1) { partner.level }, candidate_level].max,
+              []
+            )
+
+            current_best_value = if best && best[:fusion_score]
+                                   [best[:component_score], best[:fusion_score]].max
+                                 elsif best
+                                   best[:component_score]
+                                 else
+                                   -999.0
+                                 end
+
+            if fusion_score > current_best_value
+              best = {
+                :component_role => role,
+                :component => component,
+                :component_score => component_score,
+                :fusion_score => fusion_score,
+                :fusion_species => fused_data,
+                :partner => partner,
+                :orientation => fusion_def[2]
+              }
+            end
+          rescue Exception
+          end
+        end
+      end
+    end
+
+    return best
+  end
+
   def self.capture_evaluation(candidate_pkmn)
     owned = tactician_owned_pokemon
     known_move_ids = capture_known_move_ids(candidate_pkmn)
@@ -169,6 +259,14 @@ module PIFBot
     fusion = best_fusion_opportunity(candidate_pkmn)
     fusion_delta = fusion ? fusion[:score] - best_owned_score : -999.0
 
+    component = fusion_component_opportunity(candidate_pkmn)
+    component_direct_delta = component ? component[:component_score] - best_owned_score : -999.0
+    component_fusion_delta = if component && component[:fusion_score]
+                               component[:fusion_score] - best_owned_score
+                             else
+                               -999.0
+                             end
+
     reasons = []
     worth_catching = false
 
@@ -194,8 +292,22 @@ module PIFBot
       reasons.push("best available fusion projects at least 10 points above current best")
     end
 
+    if component && component_direct_delta >= 10.0
+      worth_catching = true
+      reasons.push("visible fusion component is at least 10 points above current best as a future roster asset")
+    end
+
+    if component && component[:fusion_score] && component_fusion_delta >= 12.0
+      worth_catching = true
+      reasons.push("visible fusion component can create a projected fusion at least 12 points above current best")
+    end
+
     # Duplicates need an even stronger reason in selective mode.
-    if duplicate && direct_delta < 12.0 && fusion_delta < 14.0
+    if duplicate &&
+       direct_delta < 12.0 &&
+       fusion_delta < 14.0 &&
+       component_direct_delta < 14.0 &&
+       component_fusion_delta < 16.0
       worth_catching = false
       reasons = ["duplicate species/fusion without a large enough improvement"]
     end
@@ -212,6 +324,9 @@ module PIFBot
       :duplicate => duplicate,
       :fusion => fusion,
       :fusion_delta => fusion_delta,
+      :component => component,
+      :component_direct_delta => component_direct_delta,
+      :component_fusion_delta => component_fusion_delta,
       :reasons => reasons,
       :known_move_ids => known_move_ids
     }
@@ -225,6 +340,17 @@ module PIFBot
 
     File.open(CAPTURE_HISTORY_PATH, "a") do |f|
       fusion_delta = evaluation[:fusion] ? format("%+.2f", evaluation[:fusion_delta]) : "N/A"
+      component_delta = evaluation[:component] ? format("%+.2f", evaluation[:component_direct_delta]) : "N/A"
+      component_fusion_delta = if evaluation[:component] && evaluation[:component][:fusion_score]
+                                 format("%+.2f", evaluation[:component_fusion_delta])
+                               else
+                                 "N/A"
+                               end
+      component_name = if evaluation[:component]
+                         safe_value("unknown") { evaluation[:component][:component].name }
+                       else
+                         "none"
+                       end
       new_types = evaluation[:new_types].length > 0 ? evaluation[:new_types].join(",") : "none"
       f.write(
         "#{Time.now} | #{safe_value("unknown") { candidate.name }} | " +
@@ -235,6 +361,8 @@ module PIFBot
         "best_owned #{format("%.2f", evaluation[:best_owned_score])} | " +
         "direct_delta #{format("%+.2f", evaluation[:direct_delta])} | " +
         "new_types #{new_types} | fusion_delta #{fusion_delta} | " +
+        "component #{component_name} | component_delta #{component_delta} | " +
+        "component_fusion_delta #{component_fusion_delta} | " +
         "worth #{evaluation[:worth_catching] ? "YES" : "NO"} | " +
         "balls #{total_balls} | #{evaluation[:reasons].join("; ")}\n"
       )
@@ -303,7 +431,28 @@ module PIFBot
         f.write("Projected fusion score: #{format("%.2f", fusion[:score])}\n")
         f.write("Fusion improvement delta: #{format("%+.2f", evaluation[:fusion_delta])}\n")
       else
-        f.write("Best projected fusion: unavailable/not evaluated\n")
+        f.write("Best projected direct fusion: unavailable/not evaluated\n")
+      end
+
+      if evaluation[:component]
+        component = evaluation[:component]
+        f.write("\nVisible fusion component value:\n")
+        f.write("  Best component: #{safe_value { component[:component].name }} (#{component[:component_role]})\n")
+        f.write("  Component strategic score: #{format("%.2f", component[:component_score])}\n")
+        f.write("  Component direct delta: #{format("%+.2f", evaluation[:component_direct_delta])}\n")
+        if component[:fusion_score]
+          f.write("  Best recombination: #{safe_value { component[:fusion_species].name }}\n")
+          f.write("  Recombination partner: #{safe_value { component[:partner].name }}\n")
+          f.write("  Recombination orientation: #{component[:orientation]}\n")
+          f.write("  Recombination score: #{format("%.2f", component[:fusion_score])}\n")
+          f.write("  Recombination delta: #{format("%+.2f", evaluation[:component_fusion_delta])}\n")
+        else
+          f.write("  Best recombination: none available\n")
+        end
+      elsif safe_value(false) { candidate.isFusion? }
+        f.write("\nVisible fusion component value: evaluation failed/unavailable\n")
+      else
+        f.write("\nVisible fusion component value: not applicable (wild candidate is unfused)\n")
       end
 
       f.write("\n")
