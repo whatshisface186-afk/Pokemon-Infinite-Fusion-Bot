@@ -890,6 +890,7 @@ module PIFBot
     @nav_last_direction = nil
     @nav_stop_reason = nil
     @nav_randomizer_errors = 0
+    @nav_randomizer_error_streak = 0
     @campaign_phase = nil
     @campaign_route_path = []
     @campaign_route_goal_map = nil
@@ -975,6 +976,7 @@ module PIFBot
     key = battle.object_id
     return if @nav_seen_battles[key]
     @nav_seen_battles[key] = true
+    @nav_randomizer_error_streak = 0
     @nav_wild_battles = (@nav_wild_battles || 0) + 1
     navigation_log("CAMPAIGN WILD #{@nav_wild_battles} | steps #{@nav_steps || 0} | map #{safe_value("?") { $game_map.map_id }}")
     append_action_log("CAMPAIGN_TRAIN", "wild encounter #{@nav_wild_battles}")
