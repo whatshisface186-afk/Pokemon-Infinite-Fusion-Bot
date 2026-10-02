@@ -983,8 +983,65 @@ module PIFBot
     append_action_log("ERROR", "campaign battle observe: #{e.class}: #{e.message}")
   end
 
+  def self.campaign_rotate_training_lead
+    return false if !$Trainer
+    return false if !campaign_active?
+    return false if instance_variable_get(:@campaign_phase) != :training
+
+    party = safe_value([]) { $Trainer.party }
+    return false if !party || party.length < 2
+
+    lead = party[0]
+    return false if !lead
+
+    lead_ratio = respond_to?(:navigation_hp_ratio) ? navigation_hp_ratio(lead) : begin
+      total = [safe_value(1) { lead.totalhp }.to_f, 1.0].max
+      safe_value(0) { lead.hp }.to_f / total
+    end
+    return false if lead_ratio >= 0.35 && !safe_value(false) { lead.fainted? }
+
+    cap = campaign_target_level
+    gym_ids = safe_value([]) { campaign_gym_team }.map { |pkmn| pkmn.object_id }
+
+    candidates = []
+    party.each_with_index do |pkmn, index|
+      next if index == 0 || !pkmn
+      next if !safe_value(false) { pkmn.able? }
+
+      ratio = respond_to?(:navigation_hp_ratio) ? navigation_hp_ratio(pkmn) : begin
+        total = [safe_value(1) { pkmn.totalhp }.to_f, 1.0].max
+        safe_value(0) { pkmn.hp }.to_f / total
+      end
+      next if ratio < 0.60
+
+      needs_levels = safe_value(0) { pkmn.level } < cap ? 1 : 0
+      gym_member = gym_ids.include?(pkmn.object_id) ? 1 : 0
+      score = safe_value(0.0) { tactician_score(pkmn)[:total] }
+      candidates.push([index, pkmn, needs_levels, gym_member, ratio, score])
+    end
+    return false if candidates.length == 0
+
+    candidates.sort_by! do |entry|
+      [-entry[2], -entry[3], -entry[4], -entry[5]]
+    end
+    pick = candidates[0]
+    moved = party.delete_at(pick[0])
+    party.unshift(moved)
+
+    append_action_log(
+      "TRAINING_ROTATE",
+      "#{safe_value("unknown") { lead.name }} at #{format("%.1f", lead_ratio * 100.0)}% HP -> " +
+      "#{safe_value("unknown") { moved.name }} at #{format("%.1f", pick[4] * 100.0)}% HP"
+    )
+    return true
+  rescue Exception => e
+    append_action_log("ERROR", "training lead rotation: #{e.class}: #{e.message}")
+    return false
+  end
+
   def self.navigation_after_battle
     return if !campaign_active?
+    campaign_rotate_training_lead
     navigation_log("CAMPAIGN RESUME | battle complete")
     campaign_write_status("battle_complete")
   rescue Exception
