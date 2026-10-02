@@ -50,6 +50,7 @@ module PIFBot
   @campaign_ball_restock_mart_city = nil
   @campaign_ball_restock_mart_source = nil
   @campaign_ball_restock_event_id = nil
+  @campaign_ball_restock_interaction = nil
   @campaign_ball_restock_path = []
   @campaign_ball_restock_tried_shop_events = {}
   @campaign_ball_restock_blocked_money = nil
@@ -98,6 +99,7 @@ module PIFBot
     @campaign_ball_restock_mart_city = nil
     @campaign_ball_restock_mart_source = nil
     @campaign_ball_restock_event_id = nil
+    @campaign_ball_restock_interaction = nil
     @campaign_ball_restock_path = []
     @campaign_ball_restock_tried_shop_events = {}
     @campaign_ball_restock_blocked_money = nil
@@ -318,39 +320,180 @@ module PIFBot
     return nil
   end
 
+  def self.campaign_ball_restock_turn(direction)
+    case direction
+    when 2 then $game_player.turn_down
+    when 4 then $game_player.turn_left
+    when 6 then $game_player.turn_right
+    when 8 then $game_player.turn_up
+    end
+  rescue Exception
+    safe_value(nil) { $game_player.direction = direction }
+  end
+
+  def self.campaign_ball_restock_facing_event?(event)
+    return false if !event || !$game_player
+    facing = safe_value(nil) { $game_player.pbFacingEvent(true) }
+    return false if !facing
+    return safe_value(nil) { facing.id } == safe_value(nil) { event.id }
+  rescue Exception
+    return false
+  end
+
+  def self.campaign_ball_restock_event_targets(event)
+    return [] if !event || !$game_map
+
+    # [dx, dy, direction the player must face toward the event]
+    approaches = [
+      [0,  1, 8],
+      [0, -1, 2],
+      [1,  0, 4],
+      [-1, 0, 6]
+    ]
+
+    targets = []
+    approaches.each do |dx, dy, face_dir|
+      near_x = event.x + dx
+      near_y = event.y + dy
+
+      # Ordinary adjacent interaction. Do not target a counter tile itself;
+      # Infinite Fusion expects the player to stand on the customer side.
+      if safe_value(false) { $game_map.valid?(near_x, near_y) } &&
+         !safe_value(false) { $game_map.counter?(near_x, near_y) }
+        target = { :map_id => $game_map.map_id, :x => near_x, :y => near_y }
+        path = safe_value(nil) { plan_center_path(target) }
+        if path
+          targets.push({
+            :path => path,
+            :x => near_x,
+            :y => near_y,
+            :face => face_dir,
+            :mode => :adjacent
+          })
+        end
+      end
+
+      # Counter interaction. The game's own Game_Player logic checks the tile
+      # one step beyond a counter, so stand two tiles from the clerk and face
+      # through the counter instead of trying to walk onto it.
+      if safe_value(false) { $game_map.counter?(near_x, near_y) }
+        far_x = event.x + (dx * 2)
+        far_y = event.y + (dy * 2)
+        if safe_value(false) { $game_map.valid?(far_x, far_y) }
+          target = { :map_id => $game_map.map_id, :x => far_x, :y => far_y }
+          path = safe_value(nil) { plan_center_path(target) }
+          if path
+            targets.push({
+              :path => path,
+              :x => far_x,
+              :y => far_y,
+              :face => face_dir,
+              :mode => :counter
+            })
+          end
+        end
+      end
+    end
+
+    targets.sort_by! do |entry|
+      # Prefer counter-correct interaction spots when available for Mart clerks,
+      # then shortest walking path.
+      [entry[:mode] == :counter ? 0 : 1, entry[:path].length]
+    end
+    return targets
+  rescue Exception => e
+    append_action_log("ERROR", "ball restock interaction targets: #{e.class}: #{e.message}")
+    return []
+  end
+
   def self.campaign_ball_restock_move_to_event(event, label)
     return false if !event || !$game_player
     event_id = safe_value(nil) { event.id }
 
-    if campaign_adjacent_to_event?(event)
+    # This exactly mirrors Infinite Fusion's normal USE-button behavior,
+    # including NPCs reached through a counter.
+    if campaign_ball_restock_facing_event?(event)
       @campaign_ball_restock_event_id = nil
       @campaign_ball_restock_path = []
       event.start
       append_action_log(
         "BALL_RESTOCK",
-        "started #{label} event #{event_id} at #{safe_value("?") { event.x }},#{safe_value("?") { event.y }}"
+        "started #{label} event #{event_id} via facing interaction"
       )
       return true
     end
 
-    if @campaign_ball_restock_event_id != event_id ||
-       !@campaign_ball_restock_path ||
-       @campaign_ball_restock_path.length == 0
+    need_plan = @campaign_ball_restock_event_id != event_id ||
+                !@campaign_ball_restock_path ||
+                @campaign_ball_restock_path.length == 0 ||
+                !@campaign_ball_restock_interaction
+
+    if need_plan
+      targets = campaign_ball_restock_event_targets(event)
+      if targets.length == 0
+        append_action_log(
+          "BALL_RESTOCK",
+          "#{label} event #{event_id} has no reachable interaction spot"
+        )
+        @campaign_ball_restock_event_id = event_id
+        @campaign_ball_restock_path = []
+        @campaign_ball_restock_interaction = nil
+        return false
+      end
+
+      pick = targets[0]
       @campaign_ball_restock_event_id = event_id
-      @campaign_ball_restock_path = campaign_plan_adjacent_to_event(event) || []
+      @campaign_ball_restock_path = pick[:path]
+      @campaign_ball_restock_interaction = pick
       append_action_log(
         "BALL_RESTOCK",
-        "#{label} event #{event_id} | path #{@campaign_ball_restock_path.length}"
+        "#{label} event #{event_id} | #{pick[:mode]} interaction | " +
+        "stand #{pick[:x]},#{pick[:y]} face #{pick[:face]} | path #{@campaign_ball_restock_path.length}"
       )
     end
 
-    return false if @campaign_ball_restock_path.length == 0
+    spot = @campaign_ball_restock_interaction
+    if spot &&
+       $game_player.x == spot[:x] &&
+       $game_player.y == spot[:y]
+      campaign_ball_restock_turn(spot[:face])
+      if campaign_ball_restock_facing_event?(event)
+        @campaign_ball_restock_event_id = nil
+        @campaign_ball_restock_interaction = nil
+        @campaign_ball_restock_path = []
+        @campaign_ball_restock_interaction = nil
+        event.start
+        append_action_log(
+          "BALL_RESTOCK",
+          "started #{label} event #{event_id} via #{spot[:mode]} interaction"
+        )
+        return true
+      end
+
+      append_action_log(
+        "BALL_RESTOCK",
+        "#{label} event #{event_id} reached interaction spot but facing lookup failed"
+      )
+      @campaign_ball_restock_path = []
+      @campaign_ball_restock_interaction = nil
+      return false
+    end
+
+    return false if !@campaign_ball_restock_path ||
+                    @campaign_ball_restock_path.length == 0
+
     direction = @campaign_ball_restock_path[0]
     if navigation_move(direction)
       @campaign_ball_restock_path.shift
       return true
     end
+
+    append_action_log(
+      "BALL_RESTOCK",
+      "#{label} event #{event_id} path step blocked; replanning interaction spot"
+    )
     @campaign_ball_restock_path = []
+    @campaign_ball_restock_interaction = nil
     return false
   rescue Exception => e
     append_action_log("ERROR", "ball restock event path: #{e.class}: #{e.message}")
