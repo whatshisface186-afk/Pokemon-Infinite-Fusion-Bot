@@ -35,6 +35,7 @@ module PIFBot
   @center_return_resume = nil
   @center_return_path = []
   @center_return_replans = 0
+  @center_return_blocked_steps = {}
 
   def self.center_return_active?
     return @center_return_active == true
@@ -242,6 +243,28 @@ module PIFBot
     return "#{state[0]},#{state[1]},#{state[2]}"
   end
 
+  def self.center_step_key(state, direction)
+    return "#{center_state_key(state)}:#{direction}"
+  end
+
+  def self.center_step_blocked?(state, direction)
+    blocked = @center_return_blocked_steps || {}
+    return blocked[center_step_key(state, direction)] == true
+  end
+
+  def self.center_block_step(state, direction, reason = "runtime_block")
+    @center_return_blocked_steps ||= {}
+    key = center_step_key(state, direction)
+    return if @center_return_blocked_steps[key]
+
+    @center_return_blocked_steps[key] = true
+    append_action_log(
+      "CENTER_ROUTE_BLOCK",
+      "map #{state[0]} #{state[1]},#{state[2]} dir=#{direction} | #{reason}"
+    )
+  rescue Exception
+  end
+
   def self.center_connected_destination(map_id, raw_x, raw_y)
     map = safe_value(nil) { $MapFactory.getMapNoAdd(map_id) }
     return nil if !map
@@ -285,6 +308,8 @@ module PIFBot
   end
 
   def self.center_neighbor(state, direction, allowed_maps, goal = nil)
+    return nil if center_step_blocked?(state, direction)
+
     map_id, x, y = state
     map = safe_value(nil) { $MapFactory.getMapNoAdd(map_id) }
     return nil if !map
@@ -323,9 +348,21 @@ module PIFBot
 
     dest_map = safe_value(nil) { $MapFactory.getMapNoAdd(dest[0]) }
     return nil if !dest_map
-    return nil if !safe_value(false) {
-      dest_map.passable?(dest[1], dest[2], 10 - direction, $game_player)
-    }
+
+    # Match Infinite Fusion's actual edge movement rules. Game_Player#passable?
+    # checks destination passability through MapFactory#isPassableFromEdge?.
+    # For the live current tile, call the exact player rule. For offline BFS
+    # states on other maps, reproduce the same source + destination checks.
+    if $game_map && $game_player &&
+       $game_map.map_id == map_id &&
+       $game_player.x == x && $game_player.y == y
+      return nil if !safe_value(false) { $game_player.passable?(x, y, direction) }
+    else
+      return nil if !safe_value(false) { map.passable?(x, y, direction, $game_player) }
+      return nil if !safe_value(false) {
+        $MapFactory.isPassable?(dest[0], dest[1], dest[2], $game_player)
+      }
+    end
 
     unless goal && dest[0] == goal[0] && dest[1] == goal[1] && dest[2] == goal[2]
       return nil if center_destination_event_blocked?(dest_map, dest[1], dest[2])
@@ -441,6 +478,7 @@ module PIFBot
     }
     @center_return_path = best[:path]
     @center_return_replans = 0
+    @center_return_blocked_steps = {}
 
     append_action_log(
       "CENTER_RETURN",
@@ -545,6 +583,7 @@ module PIFBot
     @center_return_resume = nil
     @center_return_path = []
     @center_return_replans = 0
+    @center_return_blocked_steps = {}
     navigation_write_status("pokemon_center_trip_complete")
     write_debug_report("center_return_complete") if respond_to?(:write_debug_report)
   end
@@ -598,6 +637,7 @@ module PIFBot
     old_map = $game_map.map_id
     old_x = $game_player.x
     old_y = $game_player.y
+    old_state = [old_map, old_x, old_y]
 
     moved = navigation_move(direction)
     if moved
@@ -605,15 +645,26 @@ module PIFBot
       return
     end
 
+    # The planner can still encounter runtime-only blockers (edge collision,
+    # dynamic events, temporary map state). Remember this exact failed step and
+    # immediately replan around it instead of trying the same exit four times.
+    center_block_step(old_state, direction, "movement executor rejected planned step")
     @center_return_path = []
-    if @center_return_replans >= 4
+
+    if !center_replan
       append_action_log(
         "CENTER_RETURN",
-        "blocked repeatedly near map #{old_map} #{old_x},#{old_y}; stopping safely"
+        "route blocked at map #{old_map} #{old_x},#{old_y} dir=#{direction}; no alternate path"
       )
       navigation_stop("center_path_blocked")
       @center_return_active = false
+      return
     end
+
+    append_action_log(
+      "CENTER_RETURN",
+      "replanned around blocked step at map #{old_map} #{old_x},#{old_y} dir=#{direction}"
+    )
   rescue Exception => e
     append_action_log("ERROR", "center return update: #{e.class}: #{e.message}")
     navigation_stop("center_return_error")
