@@ -316,6 +316,7 @@ module PIFBot
       "#{@center_return_target[:x]},#{@center_return_target[:y]} | planned #{best[:distance]} steps"
     )
     navigation_write_status("returning_to_pokemon_center")
+    write_debug_report("center_return_start") if respond_to?(:write_debug_report)
     return true
   rescue Exception => e
     append_action_log("ERROR", "begin center return: #{e.class}: #{e.message}")
@@ -370,6 +371,7 @@ module PIFBot
       before.map { |e| "#{e[0]} #{e[1]}/#{e[2]}" }.join(", ")
     )
     navigation_log("CENTER HEAL | party restored")
+    write_debug_report("center_heal_complete") if respond_to?(:write_debug_report)
     return true
   rescue Exception => e
     append_action_log("ERROR", "center heal: #{e.class}: #{e.message}")
@@ -408,6 +410,7 @@ module PIFBot
     @center_return_path = []
     @center_return_replans = 0
     navigation_write_status("pokemon_center_trip_complete")
+    write_debug_report("center_return_complete") if respond_to?(:write_debug_report)
   end
 
   def self.center_replan
