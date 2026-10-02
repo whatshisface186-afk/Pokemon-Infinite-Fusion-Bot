@@ -8,9 +8,10 @@
 # - Automatically chooses and registers legal moves using Tactician's
 #   player-knowledge decision advisor.
 # - Automatically chooses a legal replacement after a faint/forced switch.
-# - In wild battles, switches to a teammate that can deal damage; runs only if the whole usable team cannot.
-# - Does NOT yet make voluntary tactical switches, use bag items, catch Pokemon,
-#   or make fusion/team-management decisions.
+# - In wild battles, selectively catches worthwhile Pokemon before ordinary move selection.
+# - If not catching, switches to a teammate that can deal damage; runs only if the whole usable team cannot.
+# - Does NOT yet make general voluntary tactical switches, use healing/battle items,
+#   or make final fusion/team-management decisions.
 #
 # The game engine still executes all selected actions normally.
 
@@ -161,6 +162,14 @@ module PIFBot
       b && b.pokemon && !b.fainted? && safe_value(false) { battle.opposes?(b.index) }
     end
     visible_opponent = opponents[0]
+
+    # Selective auto-capture is implemented in 012_AutoCapture.rb. Keep this
+    # controller usable even if that optional layer fails to load.
+    if visible_opponent &&
+       respond_to?(:try_tactician_auto_capture) &&
+       try_tactician_auto_capture(battle, idx_battler, visible_opponent)
+      return true
+    end
 
     candidates = []
 
