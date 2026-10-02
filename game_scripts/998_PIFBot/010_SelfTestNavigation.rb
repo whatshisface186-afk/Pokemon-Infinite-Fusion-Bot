@@ -23,8 +23,7 @@ module PIFBot
   NAV_TARGET_WILD_BATTLES = 10
   NAV_MAX_STEPS = 1500
   NAV_RANDOMIZER_ERROR_LIMIT = 3
-  NAV_HEAL_BELOW_RATIO = 0.60
-  NAV_HEALING_ITEMS = [:POTION, :SUPERPOTION, :FRESHWATER, :SODAPOP, :LEMONADE, :MOOMOOMILK, :HYPERPOTION, :MAXPOTION, :FULLRESTORE]
+  NAV_CENTER_RETURN_BELOW_RATIO = 0.60
   NAV_KEY_CODE = 0x79   # F10
 
   @nav_active = false
@@ -281,14 +280,6 @@ module PIFBot
     return false
   end
 
-  class NavigationHealingScene
-    def pbDisplay(_text); end
-    def pbClearAnnotations; end
-    def pbHardRefresh; end
-    def pbUpdate; end
-    def pbConfirm(_text); return false; end
-  end
-
   def self.navigation_low_hp_pokemon
     return nil if !$Trainer
     usable = safe_value([]) { $Trainer.party }.select do |pkmn|
@@ -304,81 +295,30 @@ module PIFBot
     pkmn = usable[0]
     total = [safe_value(1) { pkmn.totalhp }.to_f, 1.0].max
     ratio = safe_value(0) { pkmn.hp }.to_f / total
-    return nil if ratio >= NAV_HEAL_BELOW_RATIO
+    return nil if ratio >= NAV_CENTER_RETURN_BELOW_RATIO
     return pkmn
   rescue Exception
     return nil
-  end
-
-  def self.navigation_available_healing_item
-    return nil if !$PokemonBag
-
-    NAV_HEALING_ITEMS.each do |item_id|
-      next if !safe_value(false) { GameData::Item.exists?(item_id) }
-      next if safe_value(0) { $PokemonBag.pbQuantity(item_id) } <= 0
-      return item_id
-    end
-    return nil
-  rescue Exception
-    return nil
-  end
-
-  def self.navigation_use_healing_item(pkmn)
-    return false if !pkmn || !$PokemonBag
-
-    item_id = navigation_available_healing_item
-    return false if !item_id
-
-    scene = NavigationHealingScene.new
-    used = safe_value(false) {
-      ItemHandlers.triggerUseOnPokemon(item_id, pkmn, scene)
-    }
-    return false if !used
-
-    item_data = safe_value(nil) { GameData::Item.get(item_id) }
-    field_use = safe_value(0) { item_data.field_use }
-    if field_use == 1
-      deleted = safe_value(false) { $PokemonBag.pbDeleteItem(item_id) }
-      if !deleted
-        navigation_log("HEAL ERROR | failed to consume #{item_id}")
-        return false
-      end
-    end
-
-    append_action_log(
-      "NAV_HEAL",
-      "#{safe_value("unknown") { pkmn.name }} | used #{safe_value(item_id.to_s) { item_data.name }} | " +
-      "HP #{safe_value("?") { pkmn.hp }}/#{safe_value("?") { pkmn.totalhp }}"
-    )
-    navigation_log(
-      "HEAL | #{safe_value("unknown") { pkmn.name }} | #{safe_value(item_id.to_s) { item_data.name }} | " +
-      "HP #{safe_value("?") { pkmn.hp }}/#{safe_value("?") { pkmn.totalhp }}"
-    )
-    navigation_write_status("healed_between_battles")
-    return true
-  rescue Exception => e
-    navigation_log("ERROR heal | #{e.class}: #{e.message}")
-    append_action_log("ERROR", "navigation heal: #{e.class}: #{e.message}")
-    return false
   end
 
   def self.navigation_handle_healing
     pkmn = navigation_low_hp_pokemon
     return :not_needed if !pkmn
 
-    if navigation_use_healing_item(pkmn)
-      return :healed
+    if respond_to?(:begin_center_return) && begin_center_return(pkmn)
+      return :center_return
     end
 
     append_action_log(
-      "NAV_HEAL",
-      "#{safe_value("unknown") { pkmn.name }} is below #{(NAV_HEAL_BELOW_RATIO * 100).to_i}% HP and no usable healing item is available"
+      "CENTER_RETURN",
+      "#{safe_value("unknown") { pkmn.name }} is below #{(NAV_CENTER_RETURN_BELOW_RATIO * 100).to_i}% HP but no reachable known Pokemon Center is available"
     )
-    navigation_stop("low_hp_no_healing_items")
+    navigation_stop("low_hp_no_reachable_center")
     return :stopped
   rescue Exception => e
-    navigation_log("ERROR healing check | #{e.class}: #{e.message}")
-    return :not_needed
+    navigation_log("ERROR center-return check | #{e.class}: #{e.message}")
+    navigation_stop("center_return_error")
+    return :stopped
   end
 
   def self.navigation_can_update?
@@ -406,7 +346,13 @@ module PIFBot
   def self.navigation_update
     return if !navigation_active?
 
-    # Map identity is a hard boundary for this first test navigator.
+    # A dedicated center-return state machine temporarily owns movement and may
+    # cross connected maps. Normal self-test exploration waits until it returns.
+    if respond_to?(:center_return_active?) && center_return_active?
+      return
+    end
+
+    # Map identity is a hard boundary for normal self-test exploration.
     current_map = safe_value(nil) { $game_map.map_id }
     if @nav_start_map_id && current_map != @nav_start_map_id
       navigation_stop("map_changed")
@@ -421,7 +367,7 @@ module PIFBot
     return if !navigation_can_update?
 
     healing_result = navigation_handle_healing
-    return if healing_result == :healed || healing_result == :stopped
+    return if healing_result == :center_return || healing_result == :stopped
 
     direction = navigation_choose_direction
     if !direction
@@ -545,8 +491,8 @@ module PIFBot
       f.write("  - avoids normal trainer/sight-event lines of sight\n")
       f.write("  - uses native passability/collision\n")
       f.write("  - pauses for menus/messages/scripts/battles\n")
-      f.write("  - uses real bag healing items below #{(NAV_HEAL_BELOW_RATIO * 100).to_i}% HP\n")
-      f.write("  - stops safely if low HP and no healing item is available\n")
+      f.write("  - returns to a known reachable Pokemon Center below #{(NAV_CENTER_RETURN_BELOW_RATIO * 100).to_i}% HP\n")
+      f.write("  - does not spend healing items in the overworld\n")
       f.write("  - stops after #{NAV_TARGET_WILD_BATTLES} wild battles\n")
     end
   rescue Exception => e
@@ -640,7 +586,9 @@ Events.onMapUpdate += proc { |_sender, _event_data|
 # If something external/scripted changes maps despite our conservative movement
 # rules, stop instead of following it into another area.
 Events.onMapChange += proc { |_sender, _event_data|
-  if PIFBot.navigation_active? || PIFBot.instance_variable_get(:@nav_pending_stop)
+  center_trip = PIFBot.respond_to?(:center_return_active?) && PIFBot.center_return_active?
+  if !center_trip &&
+     (PIFBot.navigation_active? || PIFBot.instance_variable_get(:@nav_pending_stop))
     PIFBot.navigation_stop("map_change_event")
   end
 }
