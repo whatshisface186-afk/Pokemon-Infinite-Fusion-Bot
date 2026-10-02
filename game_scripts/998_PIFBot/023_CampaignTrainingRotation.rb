@@ -5,17 +5,17 @@
 # species remain player-knowledge and are learned by seeing them in battle.
 #
 # Rotation defaults:
-# - sample at least 8 wild encounters on a map
-# - after that, rotate once 4 encounters in a row reveal nothing new
-# - hard cap of 15 encounters on one map
+# - sample at least 5 wild encounters on a map
+# - after that, rotate once 2 encounters in a row reveal nothing new
+# - hard cap of 9 encounters on one map
 # - prefer encounter maps whose level range overlaps Gym cap +/- 5
 # - if none exist/reachable, fall back to the closest-level nearby maps
 
 module PIFBot
   CAMPAIGN_TRAIN_LEVEL_WINDOW = 5
-  CAMPAIGN_TRAIN_MIN_ENCOUNTERS = 8
-  CAMPAIGN_TRAIN_STALE_STREAK = 4
-  CAMPAIGN_TRAIN_HARD_CAP = 15
+  CAMPAIGN_TRAIN_MIN_ENCOUNTERS = 5
+  CAMPAIGN_TRAIN_STALE_STREAK = 2
+  CAMPAIGN_TRAIN_HARD_CAP = 9
   CAMPAIGN_TRAIN_MAP_HOP_LIMIT = 12
 
   @campaign_training_samples = {}
@@ -215,7 +215,21 @@ module PIFBot
     return [] if !anchor
     @campaign_training_anchor_map = anchor
 
+    # Build the nearby-map pool from both the next Gym city and the bot's
+    # current route. Some Infinite Fusion map links are effectively directional
+    # in the event graph, so using only the Gym-city anchor can hide a route that
+    # is actually reachable from where the bot is standing.
     distances = campaign_training_map_distances(anchor)
+    current_map = safe_value(nil) { $game_map.map_id }
+    if current_map && current_map != anchor
+      current_distances = campaign_training_map_distances(current_map)
+      current_distances.each do |map_id, hops|
+        if !distances.has_key?(map_id) || hops < distances[map_id]
+          distances[map_id] = hops
+        end
+      end
+    end
+
     cap = campaign_target_level
     low = [1, cap - CAMPAIGN_TRAIN_LEVEL_WINDOW].max
     high = cap + CAMPAIGN_TRAIN_LEVEL_WINDOW
@@ -273,21 +287,52 @@ module PIFBot
   def self.campaign_choose_next_training_map(exclude_current = true)
     current = safe_value(nil) { $game_map.map_id }
     candidates = campaign_training_candidates(exclude_current ? current : nil)
-    return nil if candidates.length == 0
+    if candidates.length == 0
+      append_action_log("CAMPAIGN_TRAIN", "alternate-route search: 0 candidate encounter maps")
+      return nil
+    end
 
-    # Prefer a map for which the current world router can actually produce a
-    # route. This also naturally rejects story-locked/unreachable candidates.
-    candidates[0, 12].each do |entry|
+    # The old version tested only the first 12 candidates. In a randomized save
+    # those can all be story-locked or unreachable even though a slightly lower-
+    # ranked nearby route is usable. First reject impossible map-graph routes
+    # cheaply, then try tile routing for a wider candidate window.
+    tested = 0
+    graph_reachable = 0
+    candidates.each do |entry|
+      break if tested >= 32
+
+      map_route = safe_value(nil) { center_map_route(current, entry[:map_id]) }
+      next if !map_route
+      graph_reachable += 1
+      tested += 1
+
       path = safe_value(nil) { campaign_plan_path_to_map(entry[:map_id]) }
-      next if !path
+      if !path
+        append_action_log(
+          "CAMPAIGN_TRAIN_ROUTE_SKIP",
+          "#{entry[:name]} | graph #{map_route.length - 1} hops | tile route unavailable"
+        )
+        next
+      end
+
       append_action_log(
         "CAMPAIGN_TRAIN",
         "selected #{entry[:name]} | levels #{entry[:range][:min]}-#{entry[:range][:max]} | " +
         "Gym cap #{campaign_target_level} +/-#{CAMPAIGN_TRAIN_LEVEL_WINDOW} | " +
-        "#{entry[:hops]} map hops | prior encounters #{entry[:sampled]}"
+        "#{entry[:hops]} nearby-map hops | #{path.length} walking steps | " +
+        "prior encounters #{entry[:sampled]}"
       )
       return entry[:map_id]
     end
+
+    preview = candidates[0, 8].map do |entry|
+      "#{entry[:name]}(L#{entry[:range][:min]}-#{entry[:range][:max]},h#{entry[:hops]})"
+    end.join(", ")
+    append_action_log(
+      "CAMPAIGN_TRAIN",
+      "alternate-route search failed | candidates #{candidates.length} | " +
+      "graph-reachable tried #{graph_reachable} | preview #{preview}"
+    )
     return nil
   rescue Exception => e
     append_action_log("ERROR", "choose training map: #{e.class}: #{e.message}")
