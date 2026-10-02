@@ -187,7 +187,7 @@ module PIFBot
     return true
   end
 
-  def self.center_neighbor(state, direction, allowed_maps)
+  def self.center_neighbor(state, direction, allowed_maps, goal = nil)
     map_id, x, y = state
     map = safe_value(nil) { $MapFactory.getMapNoAdd(map_id) }
     return nil if !map
@@ -207,7 +207,9 @@ module PIFBot
     return nil if !safe_value(false) {
       dest_map.passable?(dest[1], dest[2], 10 - direction, $game_player)
     }
-    return nil if center_destination_event_blocked?(dest_map, dest[1], dest[2])
+    unless goal && dest[0] == goal[0] && dest[1] == goal[1] && dest[2] == goal[2]
+      return nil if center_destination_event_blocked?(dest_map, dest[1], dest[2])
+    end
 
     return dest
   rescue Exception
@@ -241,7 +243,7 @@ module PIFBot
       current_key = center_state_key(current)
 
       [2, 4, 6, 8].each do |direction|
-        neighbor = center_neighbor(current, direction, allowed_maps)
+        neighbor = center_neighbor(current, direction, allowed_maps, goal)
         next if !neighbor
         nkey = center_state_key(neighbor)
         next if parent.has_key?(nkey)
