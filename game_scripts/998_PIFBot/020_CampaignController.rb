@@ -59,6 +59,7 @@ module PIFBot
   @campaign_current_battle_gym_leader = false
   @campaign_current_battle_target = nil
   @campaign_expand_until_owned_count = nil
+  @campaign_required_gym_party_size = nil
   @campaign_last_status_write = 0.0
 
   def self.campaign_active?
@@ -84,9 +85,39 @@ module PIFBot
     return safe_value([]) { $Trainer.party }.compact
   end
 
+  # Gym battles restrict the player to the leader's party size. Derive that
+  # size from Infinite Fusion's trainer data rather than hard-coding Brock=2,
+  # Misty=2, etc. Randomized Gym generation preserves the base trainer's team
+  # length, so this remains useful in randomized runs.
+  def self.campaign_gym_party_size
+    learned = safe_value(0) { @campaign_required_gym_party_size.to_i }
+    return learned if learned > 0
+
+    gym = campaign_next_gym
+    return 1 if !gym
+
+    matches = []
+    safe_value({}) { GameData::Trainer.list_all }.each_value do |trainer|
+      next if !trainer
+      next if safe_value(nil) { trainer.trainer_type } != gym[:trainer_type]
+      matches.push(trainer)
+    end
+    return 1 if matches.length == 0
+
+    primary = matches.find { |trainer| safe_value(-1) { trainer.version } == 0 }
+    primary ||= matches.min_by { |trainer| safe_value(9999) { trainer.version } }
+    count = safe_value(1) { primary.pokemon.length }
+    count = 1 if count <= 0
+    @campaign_required_gym_party_size = count
+    return count
+  rescue Exception
+    return 1
+  end
+
   def self.campaign_team_ready?
     team = campaign_selected_team
     return false if team.length == 0
+    return false if team.length < campaign_gym_party_size
     cap = campaign_target_level
     team.each do |pkmn|
       return false if safe_value(0) { pkmn.level } < cap
@@ -688,6 +719,7 @@ module PIFBot
       f.write("Next Gym: #{gym ? gym[:leader] : "none"}\n")
       f.write("Gym city: #{gym ? gym[:city] : "none"}\n")
       f.write("Target level: #{campaign_target_level}\n")
+      f.write("Gym party size: #{campaign_gym_party_size}\n")
       f.write("Gym losses: #{@campaign_gym_losses || 0}/#{CAMPAIGN_REBUILD_LOSS_LIMIT}\n")
       f.write("Roster expansion active: #{campaign_expanding_roster?}\n")
       f.write("Owned Pokemon: #{campaign_owned_count}\n")
@@ -733,6 +765,7 @@ module PIFBot
     @campaign_seen_battles = {}
     @campaign_current_battle_gym_leader = false
     @campaign_last_badge_count = safe_value(0) { $Trainer.badge_count }
+    @campaign_required_gym_party_size = nil
 
     @nav_capture_history_offset = begin
       File.exist?(CAPTURE_HISTORY_PATH) ? File.size(CAPTURE_HISTORY_PATH) : 0
@@ -901,6 +934,7 @@ module PIFBot
         @campaign_gym_losses = 0
         @campaign_target_gym_map = nil
         @campaign_training_map = nil
+        @campaign_required_gym_party_size = nil
         @campaign_phase = nil
       else
         return
@@ -915,6 +949,23 @@ module PIFBot
     if @campaign_phase == :rebuild_team
       campaign_rebuild_team
       return
+    end
+
+    # Never walk into the leader-selection screen with fewer usable roster
+    # options than the Gym requires. The Brock debug exposed this immediately:
+    # one owned Pokemon cannot satisfy a two-Pokemon Gym entry.
+    required_party = campaign_gym_party_size
+    if campaign_owned_count < required_party
+      @campaign_expand_until_owned_count = required_party
+      append_action_log(
+        "CAMPAIGN_TEAM",
+        "next Gym requires #{required_party} Pokemon; owned #{campaign_owned_count}; collecting unique options"
+      )
+    elsif campaign_selected_team.length < required_party
+      selected = campaign_select_best_owned_team
+      if selected.length >= required_party
+        campaign_apply_owned_team(selected)
+      end
     end
 
     if @campaign_expand_until_owned_count &&
