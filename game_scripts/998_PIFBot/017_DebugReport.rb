@@ -160,6 +160,11 @@ module PIFBot
       file.write("Resume point: none\n")
     end
     file.write("Remaining planned steps: #{path.length}\n")
+    blocked_steps = debug_safe({}) { instance_variable_get(:@center_return_blocked_steps) || {} }
+    file.write("Runtime-blocked route steps: #{blocked_steps.length}\n")
+    blocked_steps.keys.sort.each do |key|
+      file.write("  #{key}\n")
+    end
     if path.length > 0
       preview = path[0, 80].map { |d| d.to_s }.join(",")
       preview += ",..." if path.length > 80
