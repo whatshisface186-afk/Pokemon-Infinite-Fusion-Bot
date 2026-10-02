@@ -900,6 +900,7 @@ module PIFBot
     @campaign_current_battle_gym_leader = false
     @campaign_last_badge_count = safe_value(0) { $Trainer.badge_count }
     @campaign_required_gym_party_size = nil
+    @campaign_expand_until_owned_count = nil
     @campaign_expansion_reason = nil
     @campaign_training_path = []
 
@@ -1094,12 +1095,16 @@ module PIFBot
     # one owned Pokemon cannot satisfy a two-Pokemon Gym entry.
     required_party = campaign_gym_party_size
     if campaign_owned_count < required_party
+      changed_requirement = (@campaign_expand_until_owned_count != required_party ||
+                             @campaign_expansion_reason != :gym_minimum)
       @campaign_expand_until_owned_count = required_party
       @campaign_expansion_reason = :gym_minimum
-      append_action_log(
-        "CAMPAIGN_TEAM",
-        "next Gym requires #{required_party} Pokemon; owned #{campaign_owned_count}; collecting unique options"
-      )
+      if changed_requirement
+        append_action_log(
+          "CAMPAIGN_TEAM",
+          "next Gym requires #{required_party} Pokemon; owned #{campaign_owned_count}; collecting unique options"
+        )
+      end
     elsif campaign_selected_team.length < required_party
       selected = campaign_select_best_owned_team
       if selected.length >= required_party
