@@ -243,8 +243,14 @@ module PIFBot
     file.write("Usable capture balls: #{debug_safe("?") { respond_to?(:campaign_ball_count) ? campaign_ball_count : "?" }}\n")
     file.write("Trigger / target: #{debug_safe("?") { CAMPAIGN_BALL_RESTOCK_TRIGGER }}/#{debug_safe("?") { CAMPAIGN_BALL_RESTOCK_TARGET }}\n")
     file.write("Trainer money: $#{debug_safe("?") { $Trainer ? $Trainer.money : "?" }}\n")
+    resume = debug_safe(nil) { instance_variable_get(:@campaign_ball_restock_resume) }
     file.write("Resume map: #{debug_safe("none") { instance_variable_get(:@campaign_ball_restock_resume_map) || "none" }}\n")
+    file.write("Resume point: #{resume ? "map #{resume[:map_id]} @ #{resume[:x]},#{resume[:y]}" : "none"}\n")
     file.write("Mart map: #{debug_safe("none") { instance_variable_get(:@campaign_ball_restock_mart_map) || "none" }}\n")
+    file.write("Mart city: #{debug_safe("none") { instance_variable_get(:@campaign_ball_restock_mart_city) || "none" }}\n")
+    file.write("Mart locator source: #{debug_safe("none") { instance_variable_get(:@campaign_ball_restock_mart_source) || "none" }}\n")
+    mart_target = debug_safe(nil) { instance_variable_get(:@campaign_ball_restock_mart_target) }
+    file.write("Mart exterior target: #{mart_target ? "map #{mart_target[:map_id]} @ #{mart_target[:x]},#{mart_target[:y]}" : "none"}\n")
     file.write("Target event: #{debug_safe("none") { instance_variable_get(:@campaign_ball_restock_event_id) || "none" }}\n")
     file.write("Event path remaining: #{debug_safe([]) { instance_variable_get(:@campaign_ball_restock_path) || [] }.length}\n")
     tried = debug_safe({}) { instance_variable_get(:@campaign_ball_restock_tried_shop_events) || {} }
