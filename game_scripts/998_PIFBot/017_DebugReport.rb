@@ -170,13 +170,18 @@ module PIFBot
     file.write("Known centers: #{centers.length}\n")
     centers.each_with_index do |center, index|
       route = debug_safe(nil) { center_map_route(debug_safe(-1) { $game_map.map_id }, center[:map_id]) }
+      map_name = debug_safe("?") { $MapFactory.getMapNoAdd(center[:map_id]).name }
       file.write(
-        "  #{index + 1}. map #{center[:map_id]} @ #{center[:x]},#{center[:y]} " +
-        "dir=#{center[:direction]} | map_route=#{route ? route.join("->") : "unreachable"}\n"
+        "  #{index + 1}. map #{center[:map_id]} #{map_name} @ #{center[:x]},#{center[:y]} " +
+        "dir=#{center[:direction]} | source=#{center[:source] || "unknown"} | " +
+        "map_route=#{route ? route.join("->") : "unreachable"}\n"
       )
     end
 
     if $PokemonGlobal
+      file.write(
+        "Game healingSpot: #{debug_safe("nil") { $PokemonGlobal.healingSpot.inspect }}\n"
+      )
       file.write(
         "Game registered center: map #{debug_safe("?") { $PokemonGlobal.pokecenterMapId }} " +
         "@ #{debug_safe("?") { $PokemonGlobal.pokecenterX }},#{debug_safe("?") { $PokemonGlobal.pokecenterY }} " +
