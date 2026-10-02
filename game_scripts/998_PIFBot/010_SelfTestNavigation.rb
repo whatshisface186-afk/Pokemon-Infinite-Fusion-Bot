@@ -34,6 +34,7 @@ module PIFBot
   @nav_seen_battles = {}
   @nav_last_direction = nil
   @nav_stop_reason = nil
+  @nav_capture_history_offset = 0
 
   def self.navigation_active?
     return @nav_active == true
@@ -79,6 +80,11 @@ module PIFBot
     @nav_seen_battles = {}
     @nav_last_direction = nil
     @nav_stop_reason = nil
+    @nav_capture_history_offset = begin
+      File.exist?(CAPTURE_HISTORY_PATH) ? File.size(CAPTURE_HISTORY_PATH) : 0
+    rescue Exception
+      0
+    end
 
     start_key = navigation_tile_key($game_player.x, $game_player.y)
     @nav_visit_counts[start_key] = 1
@@ -420,7 +426,29 @@ module PIFBot
       style = style_key ? TEAM_STYLES[style_key] : nil
       f.write("Tactician team style: #{style ? style[:name] : style_key || "unknown"}\n\n")
 
-      f.write("Useful companion files:\n")
+      f.write("[Capture decisions from this autonomous session]\n")
+      begin
+        if File.exist?(CAPTURE_HISTORY_PATH)
+          File.open(CAPTURE_HISTORY_PATH, "r") do |capture_file|
+            offset = @nav_capture_history_offset || 0
+            offset = 0 if offset < 0 || offset > File.size(CAPTURE_HISTORY_PATH)
+            capture_file.seek(offset, IO::SEEK_SET)
+            session_text = capture_file.read
+            if session_text && session_text.length > 0
+              f.write(session_text)
+              f.write("\n") if session_text[-1, 1] != "\n"
+            else
+              f.write("No capture-history entries were written during this session.\n")
+            end
+          end
+        else
+          f.write("Capture history file unavailable.\n")
+        end
+      rescue Exception => e
+        f.write("Could not embed capture history: #{e.class}: #{e.message}\n")
+      end
+
+      f.write("\nUseful companion files:\n")
       f.write("  Data/pif_bot_capture_history.txt\n")
       f.write("  Data/pif_bot_actions.txt\n")
       f.write("  Data/pif_bot_navigation_history.txt\n")
