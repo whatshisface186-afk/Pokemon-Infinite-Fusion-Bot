@@ -10,8 +10,8 @@
 # - Automatically chooses a legal replacement after a faint/forced switch.
 # - In wild battles, selectively catches worthwhile Pokemon before ordinary move selection.
 # - If not catching, switches to a teammate that can deal damage; runs only if the whole usable team cannot.
-# - Does NOT yet make general voluntary tactical switches, use healing/battle items,
-#   or make final fusion/team-management decisions.
+# - Uses healing items only as an emergency in battle when HP is below 40%.
+# - Does NOT yet make general voluntary tactical switches or final fusion/team-management decisions.
 #
 # The game engine still executes all selected actions normally.
 
@@ -162,6 +162,14 @@ module PIFBot
       b && b.pokemon && !b.fainted? && safe_value(false) { battle.opposes?(b.index) }
     end
     visible_opponent = opponents[0]
+
+    # Emergency in-battle healing is implemented in 015_EmergencyBattleHealing.rb.
+    # It deliberately runs before capture/move choice so a critically injured
+    # active Pokemon can survive long enough to keep executing the plan.
+    if respond_to?(:try_tactician_emergency_heal) &&
+       try_tactician_emergency_heal(battle, idx_battler, user)
+      return true
+    end
 
     # Selective auto-capture is implemented in 012_AutoCapture.rb. Keep this
     # controller usable even if that optional layer fails to load.
