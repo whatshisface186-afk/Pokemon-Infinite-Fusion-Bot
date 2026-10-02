@@ -92,6 +92,7 @@ module PIFBot
 
     if campaign_owned_count < needed
       instance_variable_set(:@campaign_expand_until_owned_count, needed)
+      instance_variable_set(:@campaign_expansion_reason, :gym_minimum)
       instance_variable_set(:@campaign_phase, :training)
       append_action_log(
         "CAMPAIGN_TEAM",
