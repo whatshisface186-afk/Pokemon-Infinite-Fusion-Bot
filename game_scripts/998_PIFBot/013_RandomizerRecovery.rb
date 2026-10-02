@@ -5,9 +5,11 @@
 # return without opening those dialogs so one bad randomized encounter cannot
 # strand the bot.
 #
-# After 3 randomizer faults in one F10 session, the navigator stops and writes
-# "repeated_randomizer_errors" to the summary. Outside autonomous navigation,
-# the game's original warning UI is preserved unchanged.
+# In campaign mode, recoverable randomizer encounter faults are logged and the
+# bot keeps running; repeated consecutive faults can trigger a training-area
+# rotation instead of ending the spectator session. The conservative standalone
+# self-test can still stop after repeated consecutive faults. Outside autonomous
+# navigation, the game's original warning UI is preserved unchanged.
 
 class Object
   if private_method_defined?(:displayRandomizerErrorMessage) &&
