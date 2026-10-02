@@ -222,7 +222,7 @@ module PokemonSelection
           valid = begin
             ruleset.isPokemonValid?(pkmn, ableproc)
           rescue Exception
-            acceptFainted || (safe_value(false) { pkmn.able? })
+            acceptFainted || (begin pkmn.able? rescue false end)
           end
           eligible.push(idx) if valid
         end
@@ -238,6 +238,13 @@ module PokemonSelection
         count = [maximum, eligible.length].min
         count = minimum if count < minimum
         selected_indexes = PIFBot.campaign_rank_party_indexes(eligible, count)
+        selected_names = selected_indexes.map do |idx|
+          begin
+            $Trainer.party[idx].name
+          rescue Exception
+            "?"
+          end
+        end
 
         # force() uses the game's own saved-original-party mechanism, so the
         # ordinary Gym event can restore the full party after the battle.
@@ -245,10 +252,9 @@ module PokemonSelection
         pbSet(indexesVar, selected_indexes) if indexesVar && result
 
         if result
-          names = selected_indexes.map { |idx| safe_value("?") { $Trainer.party[idx].name } }
           PIFBot.append_action_log(
             "CAMPAIGN_TEAM",
-            "auto-selected #{selected_indexes.length} Pokemon for Gym: #{names.join(", ")}"
+            "auto-selected #{selected_indexes.length} Pokemon for Gym: #{selected_names.join(", ")}"
           )
         end
         return result
