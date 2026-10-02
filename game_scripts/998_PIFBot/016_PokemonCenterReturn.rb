@@ -360,6 +360,7 @@ module PIFBot
     end
 
     $Trainer.heal_party
+    clear_center_heal_request if respond_to?(:clear_center_heal_request)
 
     append_action_log(
       "CENTER_HEAL",
