@@ -137,6 +137,11 @@ module PIFBot
     file.write("Gym party size: #{debug_safe("?") { campaign_gym_party_size }}\n")
     file.write("Gym losses: #{debug_safe(0) { instance_variable_get(:@campaign_gym_losses) }}/#{debug_safe("?") { CAMPAIGN_REBUILD_LOSS_LIMIT }}\n")
     file.write("Roster expansion target: #{debug_safe("none") { instance_variable_get(:@campaign_expand_until_owned_count) || "none" }}\n")
+    file.write("Roster expansion reason: #{debug_safe("none") { instance_variable_get(:@campaign_expansion_reason) || "none" }}\n")
+    file.write("On encounter terrain: #{debug_safe("?") { campaign_current_tile_has_encounters? }}\n")
+    file.write("Training connector steps: #{debug_safe([]) { instance_variable_get(:@campaign_training_path) || [] }.length}\n")
+    gym_team = debug_safe([]) { campaign_gym_team }
+    file.write("Planned Gym team: #{gym_team.map { |p| debug_safe("?") { p.name } }.join(", ")}\n")
     file.write("Campaign route goal map: #{debug_safe("none") { instance_variable_get(:@campaign_route_goal_map) }}\n")
     file.write("Campaign route remaining: #{debug_safe([]) { instance_variable_get(:@campaign_route_path) || [] }.length}\n")
     file.write("Start map ID: #{debug_safe("none") { instance_variable_get(:@nav_start_map_id) }}\n")
