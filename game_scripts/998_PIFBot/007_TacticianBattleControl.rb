@@ -98,6 +98,10 @@ module PIFBot
       data = safe_value(nil) { GameData::Move.get(move.id) }
       next if !data
       next if data.category == 2   # Status move; cannot directly hurt the foe.
+      if respond_to?(:observed_move_blocked?) &&
+         observed_move_blocked?(target_pkmn, move.id)
+        next
+      end
 
       type_mult = visible_type_multiplier(data.type, target_pkmn)
       next if type_mult <= 0.0
