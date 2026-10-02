@@ -140,6 +140,15 @@ module PIFBot
     file.write("Roster expansion reason: #{debug_safe("none") { instance_variable_get(:@campaign_expansion_reason) || "none" }}\n")
     file.write("On encounter terrain: #{debug_safe("?") { campaign_current_tile_has_encounters? }}\n")
     file.write("Training connector steps: #{debug_safe([]) { instance_variable_get(:@campaign_training_path) || [] }.length}\n")
+    file.write("Training rotation pending: #{debug_safe(false) { instance_variable_get(:@campaign_training_rotate_pending) == true }}\n")
+    file.write("Training anchor map: #{debug_safe("none") { instance_variable_get(:@campaign_training_anchor_map) || "none" }}\n")
+    current_training_map = debug_safe(nil) { $game_map ? $game_map.map_id : nil }
+    if current_training_map && respond_to?(:campaign_training_map_stats)
+      sample = debug_safe({}) { campaign_training_map_stats(current_training_map) }
+      file.write("Current training-map encounters: #{sample[:encounters] || 0}\n")
+      file.write("Current training-map unique seen: #{debug_safe({}) { sample[:seen] || {} }.length}\n")
+      file.write("Current training-map stale streak: #{sample[:stale] || 0}\n")
+    end
     gym_team = debug_safe([]) { campaign_gym_team }
     file.write("Planned Gym team: #{gym_team.map { |p| debug_safe("?") { p.name } }.join(", ")}\n")
     file.write("Campaign route goal map: #{debug_safe("none") { instance_variable_get(:@campaign_route_goal_map) }}\n")
