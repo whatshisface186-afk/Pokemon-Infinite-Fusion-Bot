@@ -336,6 +336,18 @@ module PIFBot
     end
   end
 
+  # Wild battles ask "Use next Pokémon?" before pbSwitchInBetween is called.
+  # Autonomous control must answer that narrow forced-switch confirmation, or
+  # the battle blocks before choose_tactician_replacement ever gets a chance.
+  def self.forced_switch_confirmation?(msg)
+    text = msg.to_s.gsub(/[\\r\\n]+/, " ").strip
+    return true if text == safe_value("Use next Pokémon?") { _INTL("Use next Pokémon?") }
+    return true if text == "Use next Pokemon?"
+    return false
+  rescue Exception
+    return false
+  end
+
   def self.choose_tactician_replacement(battle, idx_battler)
     party = safe_value([]) { battle.pbParty(idx_battler) }
     choices = []
@@ -380,6 +392,25 @@ class PokeBattle_AI
 end
 
 class PokeBattle_Battle
+  # In a wild battle, the engine displays "Use next Pokémon?" before it asks
+  # pbSwitchInBetween for the actual replacement. Answer only that specific
+  # prompt automatically; all other confirmations keep their normal behavior.
+  if method_defined?(:pbDisplayConfirm) &&
+     !method_defined?(:pifbot_control_original_pbDisplayConfirm)
+    alias_method :pifbot_control_original_pbDisplayConfirm, :pbDisplayConfirm
+
+    def pbDisplayConfirm(msg)
+      if PIFBot.tactician_auto_control? && PIFBot.forced_switch_confirmation?(msg)
+        PIFBot.append_action_log(
+          "FORCED_SWITCH_CONFIRM",
+          "auto YES | #{msg.to_s.gsub(/[\\r\\n]+/, " ")}"
+        )
+        return true
+      end
+      pifbot_control_original_pbDisplayConfirm(msg)
+    end
+  end
+
   unless method_defined?(:pifbot_control_original_pbCommandPhase)
     alias_method :pifbot_control_original_pbCommandPhase, :pbCommandPhase
 
