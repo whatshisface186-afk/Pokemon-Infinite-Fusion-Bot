@@ -610,9 +610,18 @@ class Object
                       speech_bye = nil, speech_what_else = nil)
       if PIFBot.campaign_ball_restock_waiting_for_shop?
         effective_stock = stock.is_a?(Array) ? stock.dup : []
-        if $game_switches &&
-           safe_value(false) { $game_switches[SWITCH_RANDOM_ITEMS_GENERAL] } &&
-           safe_value(false) { $game_switches[SWITCH_RANDOM_SHOP_ITEMS] } &&
+        random_general = begin
+          $game_switches && $game_switches[SWITCH_RANDOM_ITEMS_GENERAL]
+        rescue Exception
+          false
+        end
+        random_shops = begin
+          $game_switches && $game_switches[SWITCH_RANDOM_SHOP_ITEMS]
+        rescue Exception
+          false
+        end
+
+        if random_general && random_shops &&
            respond_to?(:replaceShopStockWithRandomized, true)
           effective_stock = replaceShopStockWithRandomized(effective_stock)
         end
