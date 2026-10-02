@@ -158,6 +158,28 @@ module PIFBot
     return [nx, ny]
   end
 
+  def self.navigation_trainer_sight_tile?(x, y)
+    events = safe_value({}) { $game_map.events }
+    proxy_class = Struct.new(:x, :y)
+    proxy = proxy_class.new(x, y)
+
+    events.each_value do |event|
+      next if !event
+      name = safe_value("") { event.name }
+      next if !name
+      match = name.match(/(?:trainer|sight)\((\d+)\)/i)
+      next if !match
+
+      distance = match[1].to_i
+      next if distance <= 0
+      return true if safe_value(false) { pbEventCanReachPlayer?(event, proxy, distance) }
+    end
+    return false
+  rescue Exception
+    # If trainer sight prediction fails, don't block all navigation.
+    return false
+  end
+
   def self.navigation_safe_direction?(direction)
     return false if !$game_map || !$game_player
 
@@ -172,6 +194,10 @@ module PIFBot
 
     # Don't intentionally step onto NPCs, doors, transfers or other events.
     return false if navigation_event_on_tile?(nx, ny)
+
+    # Avoid route trainer/sight events before entering their normal line-of-sight
+    # trigger. This keeps self-test mode focused on wild encounters.
+    return false if navigation_trainer_sight_tile?(nx, ny)
 
     # Use the game's own collision/passability rules.
     return false if !safe_value(false) { $game_player.passable?(x, y, direction) }
@@ -364,6 +390,7 @@ module PIFBot
       f.write("Safety rules:\n")
       f.write("  - stays on starting map\n")
       f.write("  - blocks destination tiles containing map events\n")
+      f.write("  - avoids normal trainer/sight-event lines of sight\n")
       f.write("  - uses native passability/collision\n")
       f.write("  - pauses for menus/messages/scripts/battles\n")
       f.write("  - stops after #{NAV_TARGET_WILD_BATTLES} wild battles\n")
