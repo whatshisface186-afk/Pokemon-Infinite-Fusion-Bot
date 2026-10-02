@@ -25,6 +25,9 @@ module PIFBot
   NAV_MAX_STEPS = 1500
   NAV_RANDOMIZER_ERROR_LIMIT = 3
   NAV_CENTER_RETURN_BELOW_RATIO = 0.70
+  CAMPAIGN_CENTER_PARTY_HP_RATIO = 0.45
+  CAMPAIGN_CENTER_LOW_USABLE_FRACTION = 0.50
+  CAMPAIGN_PRE_GYM_HP_RATIO = 0.90
   NAV_KEY_CODE = 0x79   # F10
 
   @nav_active = false
@@ -304,27 +307,70 @@ module PIFBot
     return false
   end
 
+  def self.navigation_hp_ratio(pkmn)
+    return 0.0 if !pkmn
+    total = [safe_value(1) { pkmn.totalhp }.to_f, 1.0].max
+    return safe_value(0) { pkmn.hp }.to_f / total
+  rescue Exception
+    return 0.0
+  end
+
+  def self.navigation_campaign_pre_gym_heal_pokemon(party)
+    return nil if !respond_to?(:campaign_active?) || !campaign_active?
+    phase = instance_variable_get(:@campaign_phase)
+    return nil if phase != :travel_gym && phase != :gym
+    return nil if !respond_to?(:campaign_gym_team)
+
+    team = safe_value([]) { campaign_gym_team }.compact
+    return nil if team.length == 0
+
+    team.each do |pkmn|
+      return pkmn if safe_value(false) { pkmn.fainted? }
+      return pkmn if navigation_hp_ratio(pkmn) < CAMPAIGN_PRE_GYM_HP_RATIO
+      status = safe_value(:NONE) { pkmn.status }
+      return pkmn if status && status != :NONE
+    end
+    return nil
+  rescue Exception
+    return nil
+  end
+
   def self.navigation_low_hp_pokemon
     return nil if !$Trainer
     party = safe_value([]) { $Trainer.party }.compact
     return nil if party.length == 0
 
-    # Any fainted party member is enough reason to make a free Center trip.
-    fainted = party.find { |pkmn| safe_value(false) { pkmn.fainted? } }
-    return fainted if fainted
-
     usable = party.select { |pkmn| safe_value(false) { pkmn.able? } }
     return nil if usable.length == 0
 
-    usable.sort_by! do |pkmn|
-      total = [safe_value(1) { pkmn.totalhp }.to_f, 1.0].max
-      safe_value(0) { pkmn.hp }.to_f / total
+    # Campaign grinding should not abandon a route just because one Pokemon is
+    # hurt. Rotate that Pokemon out and keep training while the party still has
+    # plenty of healthy depth. A Center trip is reserved for party-wide
+    # depletion, or for topping up the selected team immediately before a Gym.
+    if respond_to?(:campaign_active?) && campaign_active?
+      pre_gym = navigation_campaign_pre_gym_heal_pokemon(party)
+      return pre_gym if pre_gym
+
+      total_hp = party.inject(0.0) { |sum, pkmn| sum + safe_value(0) { pkmn.hp }.to_f }
+      total_max = party.inject(0.0) do |sum, pkmn|
+        sum + [safe_value(1) { pkmn.totalhp }.to_f, 1.0].max
+      end
+      party_ratio = total_max > 0.0 ? total_hp / total_max : 0.0
+      usable_fraction = usable.length.to_f / [party.length, 1].max.to_f
+
+      if party_ratio <= CAMPAIGN_CENTER_PARTY_HP_RATIO ||
+         usable_fraction <= CAMPAIGN_CENTER_LOW_USABLE_FRACTION
+        return party.min_by { |pkmn| navigation_hp_ratio(pkmn) }
+      end
+      return nil
     end
 
-    pkmn = usable[0]
-    total = [safe_value(1) { pkmn.totalhp }.to_f, 1.0].max
-    ratio = safe_value(0) { pkmn.hp }.to_f / total
-    return nil if ratio >= NAV_CENTER_RETURN_BELOW_RATIO
+    # Legacy self-test behavior outside campaign mode.
+    fainted = party.find { |pkmn| safe_value(false) { pkmn.fainted? } }
+    return fainted if fainted
+
+    pkmn = usable.min_by { |entry| navigation_hp_ratio(entry) }
+    return nil if !pkmn || navigation_hp_ratio(pkmn) >= NAV_CENTER_RETURN_BELOW_RATIO
     return pkmn
   rescue Exception
     return nil
@@ -337,6 +383,13 @@ module PIFBot
 
     reason = if requested && respond_to?(:center_heal_request_reason)
                center_heal_request_reason
+             elsif pkmn && respond_to?(:campaign_active?) && campaign_active?
+               phase = instance_variable_get(:@campaign_phase)
+               if phase == :travel_gym || phase == :gym
+                 "pre-Gym team recovery"
+               else
+                 "party-wide depletion"
+               end
              elsif pkmn
                "#{safe_value("unknown") { pkmn.name }} below #{(NAV_CENTER_RETURN_BELOW_RATIO * 100).to_i}% HP"
              else
