@@ -10,7 +10,7 @@ end
 
 module PIFBot
   TEAM_STYLE_REPORT_PATH = "Data/pif_bot_team_style.txt"
-  TEAM_STYLE_VERSION = 1
+  TEAM_STYLE_VERSION = 2
 
   TEAM_STYLES = {
     :BALANCE => {
@@ -99,6 +99,147 @@ module PIFBot
     }
   }
 
+  STYLE_MOVE_GROUPS = {
+    :recovery => [:RECOVER, :ROOST, :SOFTBOILED, :MILKDRINK, :SLACKOFF, :MOONLIGHT, :MORNINGSUN, :SYNTHESIS, :REST, :WISH, :AQUARING, :INGRAIN],
+    :drain => [:GIGADRAIN, :MEGADRAIN, :DRAINPUNCH, :DRAININGKISS, :HORNLEECH, :LEECHLIFE, :PARABOLICCHARGE],
+    :status => [:TOXIC, :WILLOWISP, :THUNDERWAVE, :GLARE, :SPORE, :SLEEPPOWDER, :HYPNOSIS, :YAWN, :STUNSPORE, :POISONPOWDER],
+    :passive => [:LEECHSEED, :TOXIC, :WILLOWISP, :SANDSTORM, :HAIL],
+    :protect => [:PROTECT, :DETECT, :KINGSSHIELD, :SPIKYSHIELD, :BANEFULBUNKER],
+    :phazing => [:ROAR, :WHIRLWIND, :DRAGONTAIL, :CIRCLETHROW],
+    :hazards => [:STEALTHROCK, :SPIKES, :TOXICSPIKES, :STICKYWEB],
+    :setup => [:SWORDSDANCE, :DRAGONDANCE, :CALMMIND, :QUIVERDANCE, :NASTYPLOT, :SHELLSMASH, :BULKUP, :COIL, :CURSE, :AGILITY, :ROCKPOLISH],
+    :priority => [:EXTREMESPEED, :BULLETPUNCH, :MACHPUNCH, :AQUAJET, :SUCKERPUNCH, :ICESHARD, :SHADOWSNEAK, :VACUUMWAVE, :QUICKATTACK],
+    :pivot => [:UTURN, :VOLTSWITCH, :PARTINGSHOT, :FLIPTURN],
+    :rain => [:RAINDANCE, :THUNDER, :HURRICANE],
+    :sun => [:SUNNYDAY, :SOLARBEAM, :SOLARBLADE, :MORNINGSUN, :SYNTHESIS],
+    :sand => [:SANDSTORM],
+    :hail => [:HAIL, :BLIZZARD],
+    :trick_room => [:TRICKROOM]
+  }
+
+  STYLE_ABILITY_GROUPS = {
+    :rain => [:DRIZZLE, :SWIFTSWIM, :DRYSKIN, :RAINDISH, :HYDRATION],
+    :sun => [:DROUGHT, :CHLOROPHYLL, :SOLARPOWER, :FLOWERGIFT, :LEAFGUARD],
+    :sand => [:SANDSTREAM, :SANDRUSH, :SANDFORCE, :SANDVEIL],
+    :hail => [:SNOWWARNING, :SLUSHRUSH, :ICEBODY, :SNOWCLOAK]
+  }
+
+  def self.style_move_count(move_ids, group)
+    wanted = STYLE_MOVE_GROUPS[group] || []
+    count = 0
+    move_ids.each do |move_id|
+      count += 1 if wanted.include?(move_id)
+    end
+    return count
+  end
+
+  def self.tactician_style_fit(species_data, move_ids = [], ability_id = nil)
+    key = tactician_team_style_key
+    return { :score => 0.0, :reasons => [] } if !key || !species_data
+
+    stats = safe_value({}) { species_data.base_stats }
+    hp  = safe_value(1) { stats[:HP] }
+    atk = safe_value(1) { stats[:ATTACK] }
+    dfn = safe_value(1) { stats[:DEFENSE] }
+    spa = safe_value(1) { stats[:SPECIAL_ATTACK] }
+    spd = safe_value(1) { stats[:SPECIAL_DEFENSE] }
+    spe = safe_value(1) { stats[:SPEED] }
+    offense = [atk, spa].max
+    bulk = (hp + dfn + spd) / 3.0
+    types = safe_value([]) { species_data.types }.uniq
+
+    score = 0.0
+    reasons = []
+
+    add = proc do |points, reason|
+      next if points <= 0
+      score += points
+      reasons.push(reason)
+    end
+
+    case key
+    when :BALANCE
+      add.call([[offense / 180.0 * 5.0, 5.0].min, 0.0].max, "usable offensive profile")
+      add.call([[bulk / 180.0 * 5.0, 5.0].min, 0.0].max, "usable bulk")
+      add.call([[spe / 180.0 * 3.0, 3.0].min, 0.0].max, "speed contribution")
+      add.call(2.0, "dual typing") if types.length >= 2
+      add.call([style_move_count(move_ids, :recovery), 1].min * 2.0, "recovery access")
+      add.call([style_move_count(move_ids, :pivot), 1].min * 3.0, "pivot access")
+    when :HYPER_OFFENSE
+      add.call([[offense / 180.0 * 8.0, 8.0].min, 0.0].max, "high offensive stat")
+      add.call([[spe / 180.0 * 6.0, 6.0].min, 0.0].max, "speed")
+      add.call([style_move_count(move_ids, :setup), 1].min * 4.0, "setup move")
+      add.call([style_move_count(move_ids, :priority), 1].min * 2.0, "priority")
+    when :BULKY_OFFENSE
+      add.call([[bulk / 180.0 * 8.0, 8.0].min, 0.0].max, "bulk")
+      add.call([[offense / 180.0 * 7.0, 7.0].min, 0.0].max, "offensive pressure")
+      sustain = style_move_count(move_ids, :recovery) + style_move_count(move_ids, :drain)
+      add.call([sustain, 1].min * 3.0, "sustain")
+      add.call(2.0, "dual typing") if types.length >= 2
+    when :STALL
+      add.call([[bulk / 180.0 * 10.0, 10.0].min, 0.0].max, "high bulk")
+      add.call([style_move_count(move_ids, :recovery), 1].min * 4.0, "recovery")
+      add.call([style_move_count(move_ids, :status), 1].min * 3.0, "status")
+      passive = style_move_count(move_ids, :passive) + style_move_count(move_ids, :protect) + style_move_count(move_ids, :phazing)
+      add.call([passive, 1].min * 3.0, "passive damage/protection/phazing")
+    when :HAZARD_STACK
+      add.call([style_move_count(move_ids, :hazards), 2].min * 6.0, "entry hazards")
+      add.call([style_move_count(move_ids, :phazing), 1].min * 4.0, "phazing")
+      add.call([[bulk / 180.0 * 4.0, 4.0].min, 0.0].max, "setter durability")
+    when :RAIN
+      add.call(5.0, "Water typing") if types.include?(:WATER)
+      add.call(2.0, "Electric typing") if types.include?(:ELECTRIC)
+      add.call([style_move_count(move_ids, :rain), 2].min * 4.0, "rain move synergy")
+      add.call(7.0, "known rain ability") if STYLE_ABILITY_GROUPS[:rain].include?(ability_id)
+      add.call([[spe / 180.0 * 2.0, 2.0].min, 0.0].max, "speed")
+    when :SUN
+      add.call(5.0, "Fire typing") if types.include?(:FIRE)
+      add.call(4.0, "Grass typing") if types.include?(:GRASS)
+      add.call([style_move_count(move_ids, :sun), 2].min * 4.0, "sun move synergy")
+      add.call(7.0, "known sun ability") if STYLE_ABILITY_GROUPS[:sun].include?(ability_id)
+    when :SAND
+      sand_types = types.select { |t| [:ROCK, :GROUND, :STEEL].include?(t) }
+      add.call([sand_types.length, 2].min * 4.0, "sand-safe typing")
+      add.call([style_move_count(move_ids, :sand), 1].min * 5.0, "Sandstorm access")
+      add.call(7.0, "known sand ability") if STYLE_ABILITY_GROUPS[:sand].include?(ability_id)
+      add.call([[bulk / 180.0 * 3.0, 3.0].min, 0.0].max, "sand core bulk")
+    when :HAIL
+      add.call(7.0, "Ice typing") if types.include?(:ICE)
+      add.call([style_move_count(move_ids, :hail), 2].min * 4.0, "hail/Blizzard synergy")
+      add.call(7.0, "known hail ability") if STYLE_ABILITY_GROUPS[:hail].include?(ability_id)
+      add.call([[spa / 180.0 * 2.0, 2.0].min, 0.0].max, "special pressure")
+    when :TRICK_ROOM
+      slow_score = [[(180.0 - [spe, 180].min) / 180.0 * 8.0, 8.0].min, 0.0].max
+      add.call(slow_score, "low Speed")
+      add.call([[offense / 180.0 * 6.0, 6.0].min, 0.0].max, "high offense")
+      add.call([[bulk / 180.0 * 3.0, 3.0].min, 0.0].max, "setter/attacker bulk")
+      add.call([style_move_count(move_ids, :trick_room), 1].min * 6.0, "Trick Room access")
+    when :SETUP_SWEEP
+      add.call([style_move_count(move_ids, :setup), 1].min * 8.0, "setup move")
+      add.call([[offense / 180.0 * 6.0, 6.0].min, 0.0].max, "sweeper offense")
+      add.call([[spe / 180.0 * 4.0, 4.0].min, 0.0].max, "sweeper speed")
+      add.call([[bulk / 180.0 * 2.0, 2.0].min, 0.0].max, "setup durability")
+    when :PRIORITY_OFFENSE
+      add.call([style_move_count(move_ids, :priority), 2].min * 7.0, "priority attack")
+      add.call([[offense / 180.0 * 6.0, 6.0].min, 0.0].max, "priority damage potential")
+    when :PIVOT_MOMENTUM
+      add.call([style_move_count(move_ids, :pivot), 2].min * 7.0, "pivot move")
+      add.call([[spe / 180.0 * 4.0, 4.0].min, 0.0].max, "fast pivot")
+      add.call(3.0, "dual typing") if types.length >= 2
+      add.call([[bulk / 180.0 * 2.0, 2.0].min, 0.0].max, "switching durability")
+    when :STATUS_CONTROL
+      add.call([style_move_count(move_ids, :status), 2].min * 7.0, "status access")
+      add.call([[bulk / 180.0 * 5.0, 5.0].min, 0.0].max, "status-user bulk")
+      add.call([[spe / 180.0 * 3.0, 3.0].min, 0.0].max, "status tempo")
+    end
+
+    score = 20.0 if score > 20.0
+    return { :score => score, :reasons => reasons }
+  rescue Exception => e
+    append_action_log("ERROR", "style fit: #{e.class}: #{e.message}")
+    return { :score => 0.0, :reasons => [] }
+  end
+
   def self.ensure_tactician_team_style
     return nil if !$PokemonGlobal
 
@@ -158,8 +299,8 @@ module PIFBot
       f.write("\nCurrent implementation stage:\n")
       f.write("  - Style selection and save persistence: ACTIVE\n")
       f.write("  - Reporting: ACTIVE\n")
-      f.write("  - Style-aware catch scoring: NOT YET ACTIVE\n")
-      f.write("  - Style-aware fusion scoring: NOT YET ACTIVE\n")
+      f.write("  - Style-aware catch scoring: ACTIVE\n")
+      f.write("  - Style-aware fusion scoring: ACTIVE FOR CAPTURE PROJECTIONS\n")
       f.write("  - Style-aware final party construction: NOT YET ACTIVE\n")
       f.write("  - Feasibility-based reroll after prolonged failure to find core pieces: PLANNED\n")
     end
