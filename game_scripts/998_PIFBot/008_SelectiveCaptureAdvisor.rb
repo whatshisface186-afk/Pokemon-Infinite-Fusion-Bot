@@ -339,6 +339,17 @@ module PIFBot
       reasons.push("visible fusion component can create a projected fusion at least 12 points above current best")
     end
 
+    # During campaign roster-expansion after repeated Gym losses, broaden the
+    # normally very-selective capture policy, but still avoid duplicates. This
+    # deliberately gathers new strategic/fusion components rather than wasting
+    # balls on copies of options Tactician already owns.
+    if respond_to?(:campaign_expanding_roster?) &&
+       campaign_expanding_roster? &&
+       !duplicate
+      worth_catching = true
+      reasons.push("campaign rebuild is collecting new unique roster options")
+    end
+
     # Duplicates need an even stronger reason in selective mode.
     if duplicate &&
        effective_delta < 12.0 &&
