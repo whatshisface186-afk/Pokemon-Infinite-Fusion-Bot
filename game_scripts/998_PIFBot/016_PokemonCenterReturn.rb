@@ -10,8 +10,9 @@
 # used as a fallback for saves created before this bot started recording centers.
 #
 # Scope:
-# - Uses connected-map walking only; no hidden teleport to the Center.
-# - Does not intentionally solve scripted doors/caves/warps yet.
+# - Uses seamless map connections plus ordinary player-touch Transfer Player events.
+# - No hidden teleport to the Center.
+# - Script-only/action-button warps are still outside this first routing layer.
 # - If no known Center has a connected walking path, F10 stops safely.
 # - If the normal Center entrance event transfers the player inside, heal there
 #   and use the game's normal exit_pokemon_center path to return outside.
@@ -114,14 +115,88 @@ module PIFBot
     append_action_log("ERROR", "record center: #{e.class}: #{e.message}")
   end
 
+  def self.center_event_transfer(event)
+    return nil if !event
+    trigger = safe_value(-1) { event.trigger }
+    # Game_Player checks [1,2] after stepping onto a tile.
+    return nil if trigger != 1 && trigger != 2
+
+    list = safe_value([]) { event.list }
+    return nil if !list
+
+    command = list.find { |cmd| cmd && safe_value(-1) { cmd.code } == 201 }
+    return nil if !command
+    params = safe_value(nil) { command.parameters }
+    return nil if !params || params.length < 5
+
+    # Start with direct appointments only. Variable-driven transfers can depend
+    # on story state and need a separate runtime resolver.
+    return nil if params[0] != 0
+
+    map_id = params[1]
+    x = params[2]
+    y = params[3]
+    direction = params[4]
+    return nil if !map_id || map_id.to_i <= 0
+
+    return {
+      :map_id => map_id.to_i,
+      :x => x.to_i,
+      :y => y.to_i,
+      :direction => direction,
+      :event_id => safe_value("?") { event.id },
+      :event_x => safe_value("?") { event.x },
+      :event_y => safe_value("?") { event.y },
+      :trigger => trigger
+    }
+  rescue Exception
+    return nil
+  end
+
+  def self.center_transfer_edges(map_id)
+    map = safe_value(nil) { $MapFactory.getMapNoAdd(map_id) }
+    return [] if !map
+
+    ret = []
+    safe_value({}) { map.events }.each_value do |event|
+      edge = center_event_transfer(event)
+      ret.push(edge) if edge
+    end
+    return ret
+  rescue Exception
+    return []
+  end
+
+  def self.center_transfer_at(map, x, y)
+    return nil if !map
+    safe_value({}) { map.events }.each_value do |event|
+      next if !event
+      on_tile = safe_value(false) { event.at_coordinate?(x, y) }
+      next if !on_tile
+      edge = center_event_transfer(event)
+      return edge if edge
+    end
+    return nil
+  rescue Exception
+    return nil
+  end
+
   def self.center_map_neighbors(map_id)
     ret = []
+
     conns = safe_value([]) { MapFactoryHelper.getMapConnections[map_id] }
-    return ret if !conns
-    conns.each do |conn|
-      other = (conn[0] == map_id) ? conn[3] : conn[0]
+    if conns
+      conns.each do |conn|
+        other = (conn[0] == map_id) ? conn[3] : conn[0]
+        ret.push(other) if other && !ret.include?(other)
+      end
+    end
+
+    center_transfer_edges(map_id).each do |edge|
+      other = edge[:map_id]
       ret.push(other) if other && !ret.include?(other)
     end
+
     return ret
   rescue Exception
     return []
@@ -217,18 +292,41 @@ module PIFBot
     raw_x = x + (direction == 6 ? 1 : direction == 4 ? -1 : 0)
     raw_y = y + (direction == 2 ? 1 : direction == 8 ? -1 : 0)
 
+    # Ordinary in-map step. If the tile is a player-touch transfer, treat its
+    # destination as the logical next BFS state. At runtime, the bot still only
+    # presses the movement direction; Infinite Fusion executes the transfer.
+    if safe_value(false) { map.valid?(raw_x, raw_y) }
+      return nil if !safe_value(false) { map.passable?(x, y, direction, $game_player) }
+
+      transfer = center_transfer_at(map, raw_x, raw_y)
+      if transfer
+        logical = [transfer[:map_id], transfer[:x], transfer[:y]]
+        return nil if !allowed_maps.include?(logical[0])
+        target_map = safe_value(nil) { $MapFactory.getMapNoAdd(logical[0]) }
+        return nil if !target_map
+        return nil if !safe_value(false) { target_map.valid?(logical[1], logical[2]) }
+        return logical
+      end
+
+      dest = [map_id, raw_x, raw_y]
+      return nil if !allowed_maps.include?(dest[0])
+      unless goal && dest[0] == goal[0] && dest[1] == goal[1] && dest[2] == goal[2]
+        return nil if center_destination_event_blocked?(map, raw_x, raw_y)
+      end
+      return dest
+    end
+
+    # Seamless connected-map boundary step.
     dest = center_connected_destination(map_id, raw_x, raw_y)
     return nil if !dest
     return nil if !allowed_maps.include?(dest[0])
 
     dest_map = safe_value(nil) { $MapFactory.getMapNoAdd(dest[0]) }
     return nil if !dest_map
-
-    # Match the core directional tile checks used by Game_Character#passable?.
-    return nil if !safe_value(false) { map.passable?(x, y, direction, $game_player) }
     return nil if !safe_value(false) {
       dest_map.passable?(dest[1], dest[2], 10 - direction, $game_player)
     }
+
     unless goal && dest[0] == goal[0] && dest[1] == goal[1] && dest[2] == goal[2]
       return nil if center_destination_event_blocked?(dest_map, dest[1], dest[2])
     end
