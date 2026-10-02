@@ -166,6 +166,16 @@ module PIFBot
       file.write("Direction preview: #{preview}\n")
     end
 
+    transfer_edges = debug_safe([]) { center_transfer_edges(debug_safe(-1) { $game_map.map_id }) }
+    file.write("Current-map player-touch transfer edges: #{transfer_edges.length}\n")
+    transfer_edges.each do |edge|
+      dest_name = debug_safe("?") { $MapFactory.getMapNoAdd(edge[:map_id]).name }
+      file.write(
+        "  event #{edge[:event_id]} @ #{edge[:event_x]},#{edge[:event_y]} trigger=#{edge[:trigger]} -> " +
+        "map #{edge[:map_id]} #{dest_name} @ #{edge[:x]},#{edge[:y]} dir=#{edge[:direction]}\n"
+      )
+    end
+
     centers = debug_safe([]) { known_centers }
     file.write("Known centers: #{centers.length}\n")
     centers.each_with_index do |center, index|
