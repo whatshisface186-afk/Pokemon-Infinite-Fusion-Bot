@@ -39,6 +39,7 @@ module PIFBot
   @nav_stop_reason = nil
   @nav_capture_history_offset = 0
   @nav_action_log_offset = 0
+  @nav_history_offset = 0
   @nav_randomizer_errors = 0
 
   def self.navigation_active?
@@ -96,6 +97,11 @@ module PIFBot
     rescue Exception
       0
     end
+    @nav_history_offset = begin
+      File.exist?(NAV_HISTORY_PATH) ? File.size(NAV_HISTORY_PATH) : 0
+    rescue Exception
+      0
+    end
 
     start_key = navigation_tile_key($game_player.x, $game_player.y)
     @nav_visit_counts[start_key] = 1
@@ -110,6 +116,7 @@ module PIFBot
       "target #{NAV_TARGET_WILD_BATTLES} wild battles"
     )
     navigation_write_status("started")
+    write_debug_report("navigation_start") if respond_to?(:write_debug_report)
     return true
   rescue Exception => e
     navigation_log("ERROR start | #{e.class}: #{e.message}")
@@ -136,6 +143,7 @@ module PIFBot
 
     navigation_write_status(reason)
     navigation_write_summary(reason)
+    write_debug_report("navigation_stop: #{reason}") if respond_to?(:write_debug_report)
     return true
   rescue Exception
     return false
