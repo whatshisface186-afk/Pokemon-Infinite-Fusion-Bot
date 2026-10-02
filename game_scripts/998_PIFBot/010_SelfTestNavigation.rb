@@ -156,6 +156,9 @@ module PIFBot
     navigation_write_status(reason)
     navigation_write_summary(reason)
     write_debug_report("navigation_stop: #{reason}") if respond_to?(:write_debug_report)
+    if was_active && respond_to?(:notify_navigation_stop)
+      notify_navigation_stop(reason)
+    end
     return true
   rescue Exception
     return false
