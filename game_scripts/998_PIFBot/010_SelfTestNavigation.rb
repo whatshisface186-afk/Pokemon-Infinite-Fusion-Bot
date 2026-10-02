@@ -44,6 +44,7 @@ module PIFBot
   @nav_action_log_offset = 0
   @nav_history_offset = 0
   @nav_randomizer_errors = 0
+  @nav_randomizer_error_streak = 0
   @nav_last_f10_trigger_at = 0.0
 
   def self.navigation_active?
@@ -102,6 +103,7 @@ module PIFBot
     @nav_last_direction = nil
     @nav_stop_reason = nil
     @nav_randomizer_errors = 0
+    @nav_randomizer_error_streak = 0
     @nav_capture_history_offset = begin
       File.exist?(CAPTURE_HISTORY_PATH) ? File.size(CAPTURE_HISTORY_PATH) : 0
     rescue Exception
@@ -493,6 +495,7 @@ module PIFBot
     return if @nav_seen_battles[key]
     @nav_seen_battles[key] = true
 
+    @nav_randomizer_error_streak = 0
     @nav_wild_battles += 1
     navigation_log(
       "WILD #{@nav_wild_battles}/#{NAV_TARGET_WILD_BATTLES} | " +
@@ -526,26 +529,33 @@ module PIFBot
 
   def self.navigation_handle_randomizer_error(caller_lines = [])
     @nav_randomizer_errors ||= 0
+    @nav_randomizer_error_streak ||= 0
     @nav_randomizer_errors += 1
+    @nav_randomizer_error_streak += 1
 
     compact_caller = safe_value("") {
       caller_lines[0, 6].join(" <- ").gsub(/[\r\n]+/, " ")
     }
 
     navigation_log(
-      "RANDOMIZER_ERROR #{@nav_randomizer_errors}/#{NAV_RANDOMIZER_ERROR_LIMIT}" +
+      "RANDOMIZER_ERROR total #{@nav_randomizer_errors} | streak " +
+      "#{@nav_randomizer_error_streak}/#{NAV_RANDOMIZER_ERROR_LIMIT}" +
       (compact_caller.length > 0 ? " | #{compact_caller}" : "")
     )
     append_action_log(
       "RANDOMIZER_ERROR",
-      "recovered #{@nav_randomizer_errors}/#{NAV_RANDOMIZER_ERROR_LIMIT}" +
+      "recovered total #{@nav_randomizer_errors} | streak " +
+      "#{@nav_randomizer_error_streak}/#{NAV_RANDOMIZER_ERROR_LIMIT}" +
       (compact_caller.length > 0 ? " | #{compact_caller}" : "")
     )
 
     navigation_write_status("randomizer_error_recovered")
 
-    if @nav_randomizer_errors >= NAV_RANDOMIZER_ERROR_LIMIT
-      navigation_stop("repeated_randomizer_errors")
+    # The randomizer warning can be transient: the same run may immediately
+    # generate a valid encounter afterward. Stop only if errors happen
+    # consecutively without a successful wild battle resetting the streak.
+    if @nav_randomizer_error_streak >= NAV_RANDOMIZER_ERROR_LIMIT
+      navigation_stop("consecutive_randomizer_errors")
       return false
     end
 
@@ -584,7 +594,7 @@ module PIFBot
         f.write("Position: #{safe_value("?") { $game_player.x }}, #{safe_value("?") { $game_player.y }}\n")
       end
       f.write("Unique tiles visited: #{(@nav_visit_counts || {}).length}\n")
-      f.write("Randomizer errors recovered: #{@nav_randomizer_errors || 0}/#{NAV_RANDOMIZER_ERROR_LIMIT}\n")
+      f.write("Randomizer errors recovered: total #{@nav_randomizer_errors || 0} | consecutive #{@nav_randomizer_error_streak || 0}/#{NAV_RANDOMIZER_ERROR_LIMIT}\n")
       f.write("Last stop reason: #{@nav_stop_reason || "none"}\n\n")
 
       f.write("Safety rules:\n")
