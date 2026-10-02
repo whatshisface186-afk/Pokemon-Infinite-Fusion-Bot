@@ -37,6 +37,24 @@ module PIFBot
     data = safe_value(nil) { GameData::Move.get(move.id) }
     return nil if !data
 
+    if data.category != 2 && data.base_damage > 0 &&
+       respond_to?(:observed_move_blocked?) &&
+       observed_move_blocked?(target.pokemon, move.id)
+      return {
+        :index => move_index,
+        :name => move.name,
+        :kind => "OBSERVED_BLOCKED",
+        :score => -1000.0,
+        :expected_damage => 0.0,
+        :ko_pressure => 0.0,
+        :type_mult => visible_type_multiplier(data.type, target.pokemon),
+        :stab => safe_value([]) { user.pokemon.types }.include?(data.type),
+        :accuracy => (data.accuracy && data.accuracy > 0) ? data.accuracy / 100.0 : 1.0,
+        :estimated_defense => nil,
+        :reason => "observed battle effect blocked this move against this opponent"
+      }
+    end
+
     if data.category == 2 || data.base_damage <= 0
       # Deliberately simple for the first advisor. Move-specific tactical
       # status logic will be added after the action pipeline is validated.
@@ -135,13 +153,13 @@ module PIFBot
 
           advice.each_with_index do |entry, rank|
             f.write("#{rank + 1}. #{entry[:name]} | #{entry[:kind]} | score #{format("%.2f", entry[:score])}")
-            if entry[:expected_damage]
+            if !entry[:expected_damage].nil?
               f.write(" | est damage #{format("%.2f", entry[:expected_damage])}")
               f.write(" | target-HP pressure #{format("%.2f", entry[:ko_pressure])}x")
-              f.write(" | effectiveness #{format("%.2f", entry[:type_mult])}x")
-              f.write(" | STAB #{entry[:stab] ? "yes" : "no"}")
-              f.write(" | accuracy #{format("%.0f", entry[:accuracy] * 100)}%")
-              f.write(" | est target defense #{entry[:estimated_defense]}")
+              f.write(" | effectiveness #{format("%.2f", entry[:type_mult])}x") if entry[:type_mult]
+              f.write(" | STAB #{entry[:stab] ? "yes" : "no"}") if entry.has_key?(:stab)
+              f.write(" | accuracy #{format("%.0f", entry[:accuracy] * 100)}%") if entry[:accuracy]
+              f.write(" | est target defense #{entry[:estimated_defense]}") if entry[:estimated_defense]
             end
             f.write(" | #{entry[:reason]}\n")
           end
@@ -151,6 +169,8 @@ module PIFBot
         knowledge = BATTLE_KNOWLEDGE[key]
         observed_moves = knowledge ? knowledge[:moves] : []
         f.write("\nObserved enemy moves available to Tactician: #{observed_moves.length > 0 ? observed_moves.join(", ") : "none yet"}\n")
+        blocked_names = respond_to?(:observed_blocked_move_names) ? observed_blocked_move_names(target.pokemon) : []
+        f.write("Own moves visibly blocked by this opponent: #{blocked_names.length > 0 ? blocked_names.join(", ") : "none observed"}\n")
         f.write("Enemy ability/item/unrevealed moves consulted: NO\n")
         f.write("\n")
       end
