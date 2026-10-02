@@ -1,6 +1,7 @@
-# Tactician selective capture advisor v0.1
-# Read-only. Evaluates whether a visible wild Pokemon is worth spending a ball on.
-# Does NOT throw Poké Balls yet.
+# Tactician selective capture advisor v0.2
+# Evaluates whether a visible wild Pokemon is worth spending a ball on.
+# 012_AutoCapture.rb may execute the resulting YES decision through the game's
+# native Poké Ball action path.
 #
 # Personality rule: VERY SELECTIVE
 # Catch only when the wild Pokemon materially improves the owned roster through
@@ -442,7 +443,7 @@ module PIFBot
       f.write("Pokemon Infinite Fusion Bot - Selective Capture Advisor\n")
       f.write("Bot version: #{VERSION}\n")
       f.write("Time: #{Time.now}\n")
-      f.write("Mode: READ-ONLY\n")
+      f.write("Mode: ADVISOR + SELECTIVE AUTO-CAPTURE\n")
       f.write("Personality: TACTICIAN / VERY SELECTIVE\n")
       f.write("Knowledge model: PLAYER-KNOWLEDGE\n")
       f.write("\n")
@@ -531,7 +532,7 @@ module PIFBot
       if evaluation[:worth_catching] && total_balls == 0
         f.write("Capture action state: WORTH CATCHING, BUT NO BALLS AVAILABLE\n")
       elsif evaluation[:worth_catching]
-        f.write("Capture action state: ELIGIBLE FOR FUTURE AUTO-CAPTURE\n")
+        f.write("Capture action state: ELIGIBLE FOR SELECTIVE AUTO-CAPTURE\n")
       else
         f.write("Capture action state: DO NOT SPEND A BALL\n")
       end
