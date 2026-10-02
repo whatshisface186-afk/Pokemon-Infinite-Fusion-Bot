@@ -44,7 +44,9 @@ module PIFBot
   @campaign_ball_restock_active = false
   @campaign_ball_restock_phase = nil
   @campaign_ball_restock_resume_map = nil
+  @campaign_ball_restock_resume = nil
   @campaign_ball_restock_mart_map = nil
+  @campaign_ball_restock_mart_target = nil
   @campaign_ball_restock_mart_city = nil
   @campaign_ball_restock_mart_source = nil
   @campaign_ball_restock_event_id = nil
@@ -90,7 +92,9 @@ module PIFBot
     @campaign_ball_restock_active = false
     @campaign_ball_restock_phase = nil
     @campaign_ball_restock_resume_map = nil
+    @campaign_ball_restock_resume = nil
     @campaign_ball_restock_mart_map = nil
+    @campaign_ball_restock_mart_target = nil
     @campaign_ball_restock_mart_city = nil
     @campaign_ball_restock_mart_source = nil
     @campaign_ball_restock_event_id = nil
@@ -182,16 +186,23 @@ module PIFBot
     # off-screen maps and therefore could not "see" Pewter's Mart from Route 3.
     known = campaign_known_mart_candidates(start_map)
     known.each do |entry|
-      path = safe_value(nil) { campaign_plan_path_to_map(entry[:map_id]) }
+      target = {
+        :map_id => entry[:map_id],
+        :x => entry[:x],
+        :y => entry[:y]
+      }
+      path = safe_value(nil) { plan_center_path(target) }
       next if !path
 
       append_action_log(
         "BALL_RESTOCK",
         "selected known Mart #{entry[:city]} | map #{entry[:map_id]} | " +
-        "#{entry[:hops]} map hops | #{path.length} walking steps"
+        "#{entry[:hops]} map hops | #{path.length} proven walking steps"
       )
       @campaign_ball_restock_mart_city = entry[:city]
       @campaign_ball_restock_mart_source = :known_game_table
+      @campaign_ball_restock_mart_target = target
+      @campaign_ball_restock_path = path
       return entry[:map_id]
     end
 
@@ -204,6 +215,12 @@ module PIFBot
       )
       @campaign_ball_restock_mart_city = nil
       @campaign_ball_restock_mart_source = :current_map_event
+      @campaign_ball_restock_mart_target = {
+        :map_id => start_map,
+        :x => safe_value(0) { $game_player.x },
+        :y => safe_value(0) { $game_player.y }
+      }
+      @campaign_ball_restock_path = []
       return start_map
     end
 
@@ -230,11 +247,16 @@ module PIFBot
 
     @campaign_ball_restock_active = true
     @campaign_ball_restock_resume_map = $game_map.map_id
+    @campaign_ball_restock_resume = {
+      :map_id => $game_map.map_id,
+      :x => $game_player.x,
+      :y => $game_player.y
+    }
     @campaign_ball_restock_mart_map = mart_map
     @campaign_ball_restock_event_id = nil
-    @campaign_ball_restock_path = []
     @campaign_ball_restock_tried_shop_events = {}
     @campaign_ball_restock_last_result = "traveling_to_mart"
+    @center_return_blocked_steps = {}
 
     append_action_log(
       "BALL_RESTOCK",
@@ -248,13 +270,22 @@ module PIFBot
       return true
     end
 
-    if campaign_begin_route(mart_map, "travel to Poké Mart for ball restock")
+    if !@campaign_ball_restock_path || @campaign_ball_restock_path.length == 0
+      @campaign_ball_restock_path = safe_value(nil) {
+        plan_center_path(@campaign_ball_restock_mart_target)
+      }
+    end
+    if @campaign_ball_restock_path
+      append_action_log(
+        "BALL_RESTOCK",
+        "walking #{@campaign_ball_restock_path.length} steps to #{@campaign_ball_restock_mart_city || "Mart"}"
+      )
       @campaign_ball_restock_phase = :travel
       @campaign_phase = :ball_restock
       return true
     end
 
-    append_action_log("BALL_RESTOCK", "could not plan route to Mart map #{mart_map}")
+    append_action_log("BALL_RESTOCK", "could not plan proven route to Mart map #{mart_map}")
     @campaign_ball_restock_active = false
     @campaign_ball_restock_next_retry_battle =
       safe_value(0) { @nav_wild_battles || 0 } + 5
@@ -446,25 +477,32 @@ module PIFBot
   end
 
   def self.campaign_ball_restock_begin_return
-    return false if !@campaign_ball_restock_resume_map
+    return false if !@campaign_ball_restock_resume
     @campaign_ball_restock_event_id = nil
-    @campaign_ball_restock_path = []
+    @campaign_ball_restock_path = safe_value(nil) {
+      plan_center_path(@campaign_ball_restock_resume)
+    }
+    @center_return_blocked_steps = {}
 
-    if $game_map && $game_map.map_id == @campaign_ball_restock_resume_map
+    if $game_map &&
+       $game_map.map_id == @campaign_ball_restock_resume[:map_id] &&
+       $game_player.x == @campaign_ball_restock_resume[:x] &&
+       $game_player.y == @campaign_ball_restock_resume[:y]
       return campaign_ball_restock_finish
     end
 
-    if campaign_begin_route(
-         @campaign_ball_restock_resume_map,
-         "return after Poké Ball restock"
-       )
+    if @campaign_ball_restock_path
+      append_action_log(
+        "BALL_RESTOCK",
+        "returning #{@campaign_ball_restock_path.length} steps to interrupted training position"
+      )
       @campaign_ball_restock_phase = :return
       return true
     end
 
     append_action_log(
       "BALL_RESTOCK",
-      "purchase finished but return map #{@campaign_ball_restock_resume_map} is unreachable"
+      "purchase finished but interrupted position on map #{@campaign_ball_restock_resume_map} is unreachable"
     )
     navigation_stop("ball_restock_return_unreachable")
     @campaign_ball_restock_active = false
@@ -483,7 +521,11 @@ module PIFBot
     @campaign_ball_restock_active = false
     @campaign_ball_restock_phase = nil
     @campaign_ball_restock_resume_map = nil
+    @campaign_ball_restock_resume = nil
     @campaign_ball_restock_mart_map = nil
+    @campaign_ball_restock_mart_target = nil
+    @campaign_ball_restock_mart_city = nil
+    @campaign_ball_restock_mart_source = nil
     @campaign_ball_restock_event_id = nil
     @campaign_ball_restock_path = []
     @campaign_ball_restock_tried_shop_events = {}
@@ -499,13 +541,49 @@ module PIFBot
     return true
   end
 
+  def self.campaign_ball_restock_walk_target(target, arrived_on_map = false)
+    return :unreachable if !target || !$game_map || !$game_player
+    if arrived_on_map
+      return :arrived if $game_map.map_id == target[:map_id]
+    else
+      return :arrived if $game_map.map_id == target[:map_id] &&
+                         $game_player.x == target[:x] &&
+                         $game_player.y == target[:y]
+    end
+
+    if !@campaign_ball_restock_path || @campaign_ball_restock_path.length == 0
+      @campaign_ball_restock_path = safe_value(nil) { plan_center_path(target) }
+      return :unreachable if !@campaign_ball_restock_path
+    end
+
+    direction = @campaign_ball_restock_path[0]
+    old_state = [$game_map.map_id, $game_player.x, $game_player.y]
+    if navigation_move(direction)
+      @campaign_ball_restock_path.shift
+      return :moving
+    end
+
+    center_block_step(old_state, direction, "Mart restock route movement rejected")
+    @campaign_ball_restock_path = safe_value(nil) { plan_center_path(target) }
+    return :unreachable if !@campaign_ball_restock_path
+
+    append_action_log(
+      "BALL_RESTOCK",
+      "replanned around blocked step at map #{old_state[0]} #{old_state[1]},#{old_state[2]} dir=#{direction}"
+    )
+    return :moving
+  rescue Exception => e
+    append_action_log("ERROR", "ball restock walk: #{e.class}: #{e.message}")
+    return :unreachable
+  end
+
   def self.campaign_ball_restock_update
     return false if !campaign_ball_restock_active?
     return false if !navigation_can_update?
 
     case @campaign_ball_restock_phase
     when :travel
-      result = campaign_route_update
+      result = campaign_ball_restock_walk_target(@campaign_ball_restock_mart_target, true)
       if result == :arrived
         @campaign_ball_restock_phase = :enter
         @campaign_ball_restock_event_id = nil
@@ -584,7 +662,7 @@ module PIFBot
       return true
 
     when :return
-      result = campaign_route_update
+      result = campaign_ball_restock_walk_target(@campaign_ball_restock_resume, false)
       if result == :arrived
         campaign_ball_restock_finish
       elsif result == :unreachable
@@ -615,7 +693,11 @@ module PIFBot
         @campaign_ball_restock_active = false
         @campaign_ball_restock_phase = nil
         @campaign_ball_restock_resume_map = nil
+        @campaign_ball_restock_resume = nil
         @campaign_ball_restock_mart_map = nil
+        @campaign_ball_restock_mart_target = nil
+        @campaign_ball_restock_mart_city = nil
+        @campaign_ball_restock_mart_source = nil
         @campaign_ball_restock_event_id = nil
         @campaign_ball_restock_path = []
         @campaign_ball_restock_tried_shop_events = {}
