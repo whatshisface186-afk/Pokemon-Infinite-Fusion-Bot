@@ -551,9 +551,25 @@ module PIFBot
 
     navigation_write_status("randomizer_error_recovered")
 
-    # The randomizer warning can be transient: the same run may immediately
-    # generate a valid encounter afterward. Stop only if errors happen
-    # consecutively without a successful wild battle resetting the streak.
+    # Randomizer encounter-generation faults are recoverable in campaign mode:
+    # the game can generate a valid battle immediately afterward. Never kill a
+    # long spectator campaign for these warnings. If several occur in a row
+    # while training, use them as another signal to leave this encounter map.
+    if respond_to?(:campaign_active?) && campaign_active?
+      if @nav_randomizer_error_streak >= NAV_RANDOMIZER_ERROR_LIMIT &&
+         safe_value(nil) { @campaign_phase } == :training
+        unless @campaign_training_rotate_pending
+          @campaign_training_rotate_pending = true
+          append_action_log(
+            "CAMPAIGN_TRAIN",
+            "rotation queued after #{@nav_randomizer_error_streak} consecutive randomizer encounter errors"
+          )
+        end
+      end
+      return true
+    end
+
+    # Keep the conservative limit for the legacy standalone self-test.
     if @nav_randomizer_error_streak >= NAV_RANDOMIZER_ERROR_LIMIT
       navigation_stop("consecutive_randomizer_errors")
       return false
