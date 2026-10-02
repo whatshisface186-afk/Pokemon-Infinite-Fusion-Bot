@@ -93,6 +93,13 @@ module PIFBot
     return false if current_battles < (@campaign_ball_restock_next_retry_battle || 0)
 
     money = safe_value(0) { $Trainer.money }.to_i
+    if money <= 0
+      if @campaign_ball_restock_blocked_money != money
+        append_action_log("BALL_RESTOCK", "restock deferred: no money available")
+      end
+      @campaign_ball_restock_blocked_money = money
+      return false
+    end
     if @campaign_ball_restock_blocked_money &&
        money <= @campaign_ball_restock_blocked_money.to_i
       return false
@@ -137,10 +144,13 @@ module PIFBot
       head += 1
 
       if campaign_map_has_mart_entrance?(current)
+        map_name = safe_value("Map #{current}") {
+          respond_to?(:campaign_training_map_name) ?
+            campaign_training_map_name(current) : "Map #{current}"
+        }
         append_action_log(
           "BALL_RESTOCK",
-          "nearest Mart entrance map #{campaign_training_map_name(current) rescue current} " +
-          "(#{current}) | #{hops} map hops"
+          "nearest Mart entrance map #{map_name} (#{current}) | #{hops} map hops"
         )
         return current
       end
