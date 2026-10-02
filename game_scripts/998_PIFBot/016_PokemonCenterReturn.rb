@@ -396,14 +396,30 @@ module PIFBot
     candidates = known_centers
     return nil if candidates.length == 0
 
-    best = nil
+    reachable = []
     candidates.each do |center|
       path = plan_center_path(center)
       next if !path
-      entry = { :center => center, :path => path, :distance => path.length }
-      best = entry if !best || entry[:distance] < best[:distance]
+      reachable.push({
+        :center => center,
+        :path => path,
+        :distance => path.length
+      })
     end
-    return best
+    return nil if reachable.length == 0
+
+    # Prefer an actual registered/observed Pokemon Center over the outdoor
+    # healingSpot waypoint whenever the Center itself is reachable. The
+    # healingSpot remains a fallback for saves/maps where no Center interior can
+    # yet be routed to.
+    actual_centers = reachable.select do |entry|
+      source = entry[:center][:source]
+      source == :pokecenter || source == :observed_center
+    end
+    pool = actual_centers.length > 0 ? actual_centers : reachable
+
+    pool.sort_by! { |entry| entry[:distance] }
+    return pool[0]
   rescue Exception
     return nil
   end
