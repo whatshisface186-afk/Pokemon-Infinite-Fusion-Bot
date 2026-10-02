@@ -144,6 +144,8 @@ module PIFBot
     file.write("Active: #{debug_safe(false) { center_return_active? }}\n")
     file.write("Phase: #{debug_safe("none") { instance_variable_get(:@center_return_phase) }}\n")
     file.write("Replans: #{debug_safe(0) { instance_variable_get(:@center_return_replans) }}\n")
+    file.write("Last Center plan time: #{format("%.1f", debug_safe(0.0) { instance_variable_get(:@center_last_plan_ms) || 0.0 })} ms\n")
+    file.write("Off-current maps loaded for plan: #{debug_safe(0) { instance_variable_get(:@center_plan_map_loads) || 0 }}\n")
 
     target = debug_safe(nil) { instance_variable_get(:@center_return_target) }
     resume = debug_safe(nil) { instance_variable_get(:@center_return_resume) }
