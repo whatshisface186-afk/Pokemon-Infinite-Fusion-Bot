@@ -252,6 +252,15 @@ module PIFBot
     mart_target = debug_safe(nil) { instance_variable_get(:@campaign_ball_restock_mart_target) }
     file.write("Mart exterior target: #{mart_target ? "map #{mart_target[:map_id]} @ #{mart_target[:x]},#{mart_target[:y]}" : "none"}\n")
     file.write("Target event: #{debug_safe("none") { instance_variable_get(:@campaign_ball_restock_event_id) || "none" }}\n")
+    interaction = debug_safe(nil) { instance_variable_get(:@campaign_ball_restock_interaction) }
+    if interaction
+      file.write(
+        "Interaction: #{interaction[:mode]} | stand #{interaction[:x]},#{interaction[:y]} | " +
+        "face #{interaction[:face]}\n"
+      )
+    else
+      file.write("Interaction: none\n")
+    end
     file.write("Event path remaining: #{debug_safe([]) { instance_variable_get(:@campaign_ball_restock_path) || [] }.length}\n")
     tried = debug_safe({}) { instance_variable_get(:@campaign_ball_restock_tried_shop_events) || {} }
     file.write("Clerk events tried: #{tried.keys.sort.join(",")}\n")
