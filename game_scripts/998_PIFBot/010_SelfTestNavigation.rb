@@ -35,6 +35,7 @@ module PIFBot
   @nav_last_direction = nil
   @nav_stop_reason = nil
   @nav_capture_history_offset = 0
+  @nav_action_log_offset = 0
 
   def self.navigation_active?
     return @nav_active == true
@@ -82,6 +83,11 @@ module PIFBot
     @nav_stop_reason = nil
     @nav_capture_history_offset = begin
       File.exist?(CAPTURE_HISTORY_PATH) ? File.size(CAPTURE_HISTORY_PATH) : 0
+    rescue Exception
+      0
+    end
+    @nav_action_log_offset = begin
+      File.exist?(CONTROL_ACTION_LOG_PATH) ? File.size(CONTROL_ACTION_LOG_PATH) : 0
     rescue Exception
       0
     end
@@ -446,6 +452,28 @@ module PIFBot
         end
       rescue Exception => e
         f.write("Could not embed capture history: #{e.class}: #{e.message}\n")
+      end
+
+      f.write("\n[Bot actions from this autonomous session]\n")
+      begin
+        if File.exist?(CONTROL_ACTION_LOG_PATH)
+          File.open(CONTROL_ACTION_LOG_PATH, "r") do |action_file|
+            offset = @nav_action_log_offset || 0
+            offset = 0 if offset < 0 || offset > File.size(CONTROL_ACTION_LOG_PATH)
+            action_file.seek(offset, IO::SEEK_SET)
+            action_text = action_file.read
+            if action_text && action_text.length > 0
+              f.write(action_text)
+              f.write("\n") if action_text[-1, 1] != "\n"
+            else
+              f.write("No action-log entries were written during this session.\n")
+            end
+          end
+        else
+          f.write("Action log unavailable.\n")
+        end
+      rescue Exception => e
+        f.write("Could not embed action log: #{e.class}: #{e.message}\n")
       end
 
       f.write("\nUseful companion files:\n")
