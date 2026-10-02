@@ -283,9 +283,14 @@ module PIFBot
 
   def self.navigation_low_hp_pokemon
     return nil if !$Trainer
-    usable = safe_value([]) { $Trainer.party }.select do |pkmn|
-      pkmn && safe_value(false) { pkmn.able? }
-    end
+    party = safe_value([]) { $Trainer.party }.compact
+    return nil if party.length == 0
+
+    # Any fainted party member is enough reason to make a free Center trip.
+    fainted = party.find { |pkmn| safe_value(false) { pkmn.fainted? } }
+    return fainted if fainted
+
+    usable = party.select { |pkmn| safe_value(false) { pkmn.able? } }
     return nil if usable.length == 0
 
     usable.sort_by! do |pkmn|
