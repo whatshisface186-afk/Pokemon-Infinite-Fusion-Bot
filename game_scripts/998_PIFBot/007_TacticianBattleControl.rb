@@ -158,6 +158,39 @@ module PIFBot
     return nil
   end
 
+  def self.best_training_preservation_switch(battle, idx_battler, target = nil)
+    party = safe_value([]) { battle.pbParty(idx_battler) }
+    best = nil
+
+    party.each_with_index do |pkmn, party_index|
+      next if !pkmn || safe_value(true) { pkmn.fainted? }
+      next if !safe_value(false) { battle.pbCanSwitch?(idx_battler, party_index) }
+
+      total = [safe_value(1) { pkmn.totalhp }.to_f, 1.0].max
+      ratio = safe_value(0) { pkmn.hp }.to_f / total
+      next if ratio < 0.60
+
+      damage = target ? party_pokemon_damage_option(pkmn, target.pokemon) : nil
+      damage_bonus = damage ? [damage[:potential].to_f, 100.0].min : 0.0
+      base = safe_value(0.0) { tactician_score(pkmn)[:total] }
+      score = (ratio * 100.0) + base + damage_bonus
+
+      entry = {
+        :party_index => party_index,
+        :pokemon => pkmn,
+        :ratio => ratio,
+        :score => score,
+        :damage => damage
+      }
+      best = entry if !best || entry[:score] > best[:score]
+    end
+
+    return best
+  rescue Exception => e
+    append_action_log("ERROR", "training preservation scan: #{e.class}: #{e.message}")
+    return nil
+  end
+
   def self.choose_tactician_command(battle, idx_battler)
     user = safe_value(nil) { battle.battlers[idx_battler] }
     return false if !user || !user.pokemon || user.fainted?
@@ -197,6 +230,33 @@ module PIFBot
         "RUN_TO_CENTER",
         "escape failed/unavailable; falling back to normal Tactician action for this turn"
       )
+    end
+
+    # During campaign grinding, preserve a critically injured lead instead of
+    # repeatedly sending the whole party back to a Center. Switch only in wild
+    # battles, and only when a healthy legal teammate is available.
+    if safe_value(false) { battle.wildBattle? } &&
+       respond_to?(:campaign_active?) &&
+       campaign_active?
+      total_hp = [safe_value(1) { user.totalhp }.to_f, 1.0].max
+      user_ratio = safe_value(0) { user.hp }.to_f / total_hp
+      if user_ratio < 0.35
+        preserve = best_training_preservation_switch(battle, idx_battler, visible_opponent)
+        if preserve
+          switched = safe_value(false) {
+            battle.pbRegisterSwitch(idx_battler, preserve[:party_index])
+          }
+          if switched
+            append_action_log(
+              "TRAINING_SWITCH",
+              "#{safe_value("unknown") { user.name }} at #{format("%.1f", user_ratio * 100.0)}% HP -> " +
+              "#{safe_value("unknown") { preserve[:pokemon].name }} at " +
+              "#{format("%.1f", preserve[:ratio] * 100.0)}% HP"
+            )
+            return true
+          end
+        end
+      end
     end
 
     # Selective auto-capture is implemented in 012_AutoCapture.rb. Keep this
