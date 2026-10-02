@@ -82,6 +82,13 @@ module PIFBot
     return species_strategy_score(species_data, safe_value(1) { pkmn.level }, move_ids)
   end
 
+  def self.owned_style_fit(pkmn)
+    species_data = safe_value(nil) { GameData::Species.get(pkmn.species) }
+    move_ids = safe_value([]) { pkmn.moves }.map { |m| safe_value(nil) { m.id } }.compact
+    ability_id = safe_value(nil) { pkmn.ability_id }
+    return tactician_style_fit(species_data, move_ids, ability_id)
+  end
+
   def self.owned_type_set
     ret = []
     tactician_owned_pokemon.each do |entry|
@@ -127,10 +134,14 @@ module PIFBot
       ].each do |fusion_def|
         begin
           fused_data = getFusionSpecies(fusion_def[0], fusion_def[1])
-          score = species_strategy_score(fused_data, [partner.level, candidate_pkmn.level].max, [])
+          base_score = species_strategy_score(fused_data, [partner.level, candidate_pkmn.level].max, [])
+          style_fit = tactician_style_fit(fused_data, [], nil)
+          score = base_score + style_fit[:score]
           if !best || score > best[:score]
             best = {
               :score => score,
+              :base_score => base_score,
+              :style_fit => style_fit,
               :species => fused_data,
               :partner => partner,
               :orientation => fusion_def[2]
@@ -173,18 +184,22 @@ module PIFBot
       role = component_entry[0]
       component = component_entry[1]
       component_score = species_strategy_score(component, candidate_level, [])
+      component_style_fit = tactician_style_fit(component, [], nil)
+      component_effective_score = component_score + component_style_fit[:score]
 
       # Record the component by itself as a future roster asset.
       entry = {
         :component_role => role,
         :component => component,
         :component_score => component_score,
+        :component_style_fit => component_style_fit,
+        :component_effective_score => component_effective_score,
         :fusion_score => nil,
         :fusion_species => nil,
         :partner => nil,
         :orientation => nil
       }
-      best = entry if !best || component_score > best[:component_score]
+      best = entry if !best || component_effective_score > best[:component_effective_score]
 
       # Also test fusing the visible component with each currently owned
       # unfused Pokémon in both orientations.
@@ -199,16 +214,18 @@ module PIFBot
         ].each do |fusion_def|
           begin
             fused_data = getFusionSpecies(fusion_def[0], fusion_def[1])
-            fusion_score = species_strategy_score(
+            fusion_base_score = species_strategy_score(
               fused_data,
               [safe_value(1) { partner.level }, candidate_level].max,
               []
             )
+            fusion_style_fit = tactician_style_fit(fused_data, [], nil)
+            fusion_score = fusion_base_score + fusion_style_fit[:score]
 
             current_best_value = if best && best[:fusion_score]
-                                   [best[:component_score], best[:fusion_score]].max
+                                   [best[:component_effective_score], best[:fusion_score]].max
                                  elsif best
-                                   best[:component_score]
+                                   best[:component_effective_score]
                                  else
                                    -999.0
                                  end
@@ -218,7 +235,11 @@ module PIFBot
                 :component_role => role,
                 :component => component,
                 :component_score => component_score,
+                :component_style_fit => component_style_fit,
+                :component_effective_score => component_effective_score,
                 :fusion_score => fusion_score,
+                :fusion_base_score => fusion_base_score,
+                :fusion_style_fit => fusion_style_fit,
                 :fusion_species => fused_data,
                 :partner => partner,
                 :orientation => fusion_def[2]
@@ -242,11 +263,21 @@ module PIFBot
       safe_value(1) { candidate_pkmn.level },
       known_move_ids
     )
+    candidate_style_fit = tactician_style_fit(candidate_data, known_move_ids, nil)
+    candidate_effective_score = candidate_score + candidate_style_fit[:score]
 
-    owned_scores = owned.map { |entry| [entry[0], owned_strategy_score(entry[0])] }
-    best_owned_entry = owned_scores.max_by { |entry| entry[1] }
+    owned_scores = owned.map do |entry|
+      pkmn = entry[0]
+      base = owned_strategy_score(pkmn)
+      style_fit = owned_style_fit(pkmn)
+      [pkmn, base, style_fit, base + style_fit[:score]]
+    end
+    best_owned_entry = owned_scores.max_by { |entry| entry[3] }
     best_owned_score = best_owned_entry ? best_owned_entry[1] : 0.0
+    best_owned_style_fit = best_owned_entry ? best_owned_entry[2] : { :score => 0.0, :reasons => [] }
+    best_owned_effective_score = best_owned_entry ? best_owned_entry[3] : 0.0
     direct_delta = candidate_score - best_owned_score
+    effective_delta = candidate_effective_score - best_owned_effective_score
 
     owned_types = owned_type_set
     candidate_types = safe_value([]) { candidate_pkmn.types }.uniq
@@ -257,12 +288,12 @@ module PIFBot
     end
 
     fusion = best_fusion_opportunity(candidate_pkmn)
-    fusion_delta = fusion ? fusion[:score] - best_owned_score : -999.0
+    fusion_delta = fusion ? fusion[:score] - best_owned_effective_score : -999.0
 
     component = fusion_component_opportunity(candidate_pkmn)
-    component_direct_delta = component ? component[:component_score] - best_owned_score : -999.0
+    component_direct_delta = component ? component[:component_effective_score] - best_owned_effective_score : -999.0
     component_fusion_delta = if component && component[:fusion_score]
-                               component[:fusion_score] - best_owned_score
+                               component[:fusion_score] - best_owned_effective_score
                              else
                                -999.0
                              end
@@ -272,19 +303,24 @@ module PIFBot
 
     # "Very selective" thresholds. A catch must clear at least one meaningful
     # improvement test rather than merely being different.
-    if direct_delta >= 8.0
+    if effective_delta >= 8.0
       worth_catching = true
-      reasons.push("direct strategic score is at least 8 points above current best")
+      reasons.push("style-adjusted strategic score is at least 8 points above current best")
     end
 
-    if new_types.length >= 1 && direct_delta >= 3.0
+    if new_types.length >= 1 && effective_delta >= 3.0
       worth_catching = true
-      reasons.push("adds new team typing while also improving direct score")
+      reasons.push("adds new team typing while also improving style-adjusted score")
     end
 
-    if new_types.length >= 2 && candidate_score >= best_owned_score
+    if new_types.length >= 2 && candidate_effective_score >= best_owned_effective_score
       worth_catching = true
-      reasons.push("adds two new team types without sacrificing strategic score")
+      reasons.push("adds two new team types without sacrificing style-adjusted strategic score")
+    end
+
+    if candidate_style_fit[:score] >= 12.0 && effective_delta >= -3.0
+      worth_catching = true
+      reasons.push("strong fit for the selected team style without a major overall sacrifice")
     end
 
     if fusion && fusion_delta >= 10.0
@@ -304,7 +340,7 @@ module PIFBot
 
     # Duplicates need an even stronger reason in selective mode.
     if duplicate &&
-       direct_delta < 12.0 &&
+       effective_delta < 12.0 &&
        fusion_delta < 14.0 &&
        component_direct_delta < 14.0 &&
        component_fusion_delta < 16.0
@@ -317,9 +353,15 @@ module PIFBot
     return {
       :worth_catching => worth_catching,
       :candidate_score => candidate_score,
+      :candidate_style_fit => candidate_style_fit,
+      :candidate_effective_score => candidate_effective_score,
       :best_owned_score => best_owned_score,
+      :best_owned_style_fit => best_owned_style_fit,
+      :best_owned_effective_score => best_owned_effective_score,
       :best_owned => best_owned_entry ? best_owned_entry[0] : nil,
       :direct_delta => direct_delta,
+      :effective_delta => effective_delta,
+      :style_key => tactician_team_style_key,
       :new_types => new_types,
       :duplicate => duplicate,
       :fusion => fusion,
@@ -358,8 +400,12 @@ module PIFBot
         "Lv#{safe_value("?") { candidate.level }} | " +
         "Types #{safe_value("unknown") { candidate.types.join(",") }} | " +
         "score #{format("%.2f", evaluation[:candidate_score])} | " +
+        "style #{evaluation[:style_key]} | style_fit #{format("%.2f", evaluation[:candidate_style_fit][:score])} | " +
+        "effective #{format("%.2f", evaluation[:candidate_effective_score])} | " +
         "best_owned #{format("%.2f", evaluation[:best_owned_score])} | " +
+        "best_owned_effective #{format("%.2f", evaluation[:best_owned_effective_score])} | " +
         "direct_delta #{format("%+.2f", evaluation[:direct_delta])} | " +
+        "effective_delta #{format("%+.2f", evaluation[:effective_delta])} | " +
         "new_types #{new_types} | fusion_delta #{fusion_delta} | " +
         "component #{component_name} | component_delta #{component_delta} | " +
         "component_fusion_delta #{component_fusion_delta} | " +
@@ -413,13 +459,25 @@ module PIFBot
       f.write("Hidden ability/item/nature/IVs/EVs/unrevealed moves consulted: NO\n")
       f.write("\n")
 
+      style_data = TEAM_STYLES[evaluation[:style_key]]
+      f.write("Selected team style: #{style_data ? style_data[:name] : evaluation[:style_key]}\n")
+      f.write("Candidate archetype fit: #{format("%.2f", evaluation[:candidate_style_fit][:score])}/20\n")
+      if evaluation[:candidate_style_fit][:reasons].length > 0
+        f.write("Archetype fit signals: #{evaluation[:candidate_style_fit][:reasons].join(", ")}\n")
+      else
+        f.write("Archetype fit signals: none observed/derived\n")
+      end
+      f.write("\n")
+
       f.write("Candidate strategic score: #{format("%.2f", evaluation[:candidate_score])}\n")
+      f.write("Candidate style-adjusted score: #{format("%.2f", evaluation[:candidate_effective_score])}\n")
       if evaluation[:best_owned]
-        f.write("Current best owned: #{safe_value { evaluation[:best_owned].name }} | #{format("%.2f", evaluation[:best_owned_score])}\n")
+        f.write("Current best owned: #{safe_value { evaluation[:best_owned].name }} | base #{format("%.2f", evaluation[:best_owned_score])} | style fit #{format("%.2f", evaluation[:best_owned_style_fit][:score])} | adjusted #{format("%.2f", evaluation[:best_owned_effective_score])}\n")
       else
         f.write("Current best owned: none\n")
       end
-      f.write("Direct improvement delta: #{format("%+.2f", evaluation[:direct_delta])}\n")
+      f.write("Base improvement delta: #{format("%+.2f", evaluation[:direct_delta])}\n")
+      f.write("Style-adjusted improvement delta: #{format("%+.2f", evaluation[:effective_delta])}\n")
       f.write("New team types: #{evaluation[:new_types].length > 0 ? evaluation[:new_types].join(", ") : "none"}\n")
       f.write("Duplicate species/fusion: #{evaluation[:duplicate] ? "YES" : "NO"}\n")
 
@@ -428,7 +486,9 @@ module PIFBot
         f.write("Best projected fusion: #{safe_value { fusion[:species].name }}\n")
         f.write("Fusion partner: #{safe_value { fusion[:partner].name }}\n")
         f.write("Fusion orientation: #{fusion[:orientation]}\n")
-        f.write("Projected fusion score: #{format("%.2f", fusion[:score])}\n")
+        f.write("Projected fusion base score: #{format("%.2f", fusion[:base_score])}\n")
+        f.write("Projected fusion style fit: #{format("%.2f", fusion[:style_fit][:score])}/20\n")
+        f.write("Projected fusion adjusted score: #{format("%.2f", fusion[:score])}\n")
         f.write("Fusion improvement delta: #{format("%+.2f", evaluation[:fusion_delta])}\n")
       else
         f.write("Best projected direct fusion: unavailable/not evaluated\n")
@@ -439,12 +499,16 @@ module PIFBot
         f.write("\nVisible fusion component value:\n")
         f.write("  Best component: #{safe_value { component[:component].name }} (#{component[:component_role]})\n")
         f.write("  Component strategic score: #{format("%.2f", component[:component_score])}\n")
+        f.write("  Component style fit: #{format("%.2f", component[:component_style_fit][:score])}/20\n")
+        f.write("  Component adjusted score: #{format("%.2f", component[:component_effective_score])}\n")
         f.write("  Component direct delta: #{format("%+.2f", evaluation[:component_direct_delta])}\n")
         if component[:fusion_score]
           f.write("  Best recombination: #{safe_value { component[:fusion_species].name }}\n")
           f.write("  Recombination partner: #{safe_value { component[:partner].name }}\n")
           f.write("  Recombination orientation: #{component[:orientation]}\n")
-          f.write("  Recombination score: #{format("%.2f", component[:fusion_score])}\n")
+          f.write("  Recombination base score: #{format("%.2f", component[:fusion_base_score])}\n")
+          f.write("  Recombination style fit: #{format("%.2f", component[:fusion_style_fit][:score])}/20\n")
+          f.write("  Recombination adjusted score: #{format("%.2f", component[:fusion_score])}\n")
           f.write("  Recombination delta: #{format("%+.2f", evaluation[:component_fusion_delta])}\n")
         else
           f.write("  Best recombination: none available\n")
