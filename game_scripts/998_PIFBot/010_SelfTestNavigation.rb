@@ -22,6 +22,7 @@ module PIFBot
 
   NAV_TARGET_WILD_BATTLES = 10
   NAV_MAX_STEPS = 1500
+  NAV_RANDOMIZER_ERROR_LIMIT = 3
   NAV_KEY_CODE = 0x79   # F10
 
   @nav_active = false
@@ -36,6 +37,7 @@ module PIFBot
   @nav_stop_reason = nil
   @nav_capture_history_offset = 0
   @nav_action_log_offset = 0
+  @nav_randomizer_errors = 0
 
   def self.navigation_active?
     return @nav_active == true
@@ -81,6 +83,7 @@ module PIFBot
     @nav_seen_battles = {}
     @nav_last_direction = nil
     @nav_stop_reason = nil
+    @nav_randomizer_errors = 0
     @nav_capture_history_offset = begin
       File.exist?(CAPTURE_HISTORY_PATH) ? File.size(CAPTURE_HISTORY_PATH) : 0
     rescue Exception
@@ -368,6 +371,37 @@ module PIFBot
   rescue Exception
   end
 
+  def self.navigation_handle_randomizer_error(caller_lines = [])
+    @nav_randomizer_errors ||= 0
+    @nav_randomizer_errors += 1
+
+    compact_caller = safe_value("") {
+      caller_lines[0, 6].join(" <- ").gsub(/[\r\n]+/, " ")
+    }
+
+    navigation_log(
+      "RANDOMIZER_ERROR #{@nav_randomizer_errors}/#{NAV_RANDOMIZER_ERROR_LIMIT}" +
+      (compact_caller.length > 0 ? " | #{compact_caller}" : "")
+    )
+    append_action_log(
+      "RANDOMIZER_ERROR",
+      "recovered #{@nav_randomizer_errors}/#{NAV_RANDOMIZER_ERROR_LIMIT}" +
+      (compact_caller.length > 0 ? " | #{compact_caller}" : "")
+    )
+
+    navigation_write_status("randomizer_error_recovered")
+
+    if @nav_randomizer_errors >= NAV_RANDOMIZER_ERROR_LIMIT
+      navigation_stop("repeated_randomizer_errors")
+      return false
+    end
+
+    return true
+  rescue Exception => e
+    navigation_log("ERROR randomizer recovery | #{e.class}: #{e.message}")
+    return false
+  end
+
   def self.navigation_write_status(reason = "update")
     File.open(NAV_STATUS_PATH, "w") do |f|
       f.write("Pokemon Infinite Fusion Bot - Self-Test Navigation\n")
@@ -397,6 +431,7 @@ module PIFBot
         f.write("Position: #{safe_value("?") { $game_player.x }}, #{safe_value("?") { $game_player.y }}\n")
       end
       f.write("Unique tiles visited: #{(@nav_visit_counts || {}).length}\n")
+      f.write("Randomizer errors recovered: #{@nav_randomizer_errors || 0}/#{NAV_RANDOMIZER_ERROR_LIMIT}\n")
       f.write("Last stop reason: #{@nav_stop_reason || "none"}\n\n")
 
       f.write("Safety rules:\n")
@@ -426,6 +461,7 @@ module PIFBot
       f.write("Wild battles completed: #{@nav_wild_battles || 0}/#{NAV_TARGET_WILD_BATTLES}\n")
       f.write("Overworld steps: #{@nav_steps || 0}\n")
       f.write("Unique tiles visited: #{(@nav_visit_counts || {}).length}\n")
+      f.write("Randomizer errors recovered: #{@nav_randomizer_errors || 0}/#{NAV_RANDOMIZER_ERROR_LIMIT}\n")
       f.write("Map: #{@nav_start_map_name || "unknown"} (#{@nav_start_map_id || "?"})\n")
 
       style_key = safe_value(nil) { tactician_team_style_key }
