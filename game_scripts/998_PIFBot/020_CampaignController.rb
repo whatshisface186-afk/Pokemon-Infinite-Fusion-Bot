@@ -59,7 +59,9 @@ module PIFBot
   @campaign_current_battle_gym_leader = false
   @campaign_current_battle_target = nil
   @campaign_expand_until_owned_count = nil
+  @campaign_expansion_reason = nil
   @campaign_required_gym_party_size = nil
+  @campaign_training_path = []
   @campaign_last_status_write = 0.0
 
   def self.campaign_active?
@@ -114,9 +116,21 @@ module PIFBot
     return 1
   end
 
-  def self.campaign_team_ready?
+  def self.campaign_gym_team
     team = campaign_selected_team
-    return false if team.length == 0
+    needed = campaign_gym_party_size
+    return [] if team.length < needed
+
+    indexes = (0...team.length).to_a
+    ranked = campaign_rank_party_indexes(indexes, needed) if respond_to?(:campaign_rank_party_indexes)
+    ranked ||= indexes[0, needed]
+    return ranked.map { |idx| team[idx] }.compact
+  rescue Exception
+    return team[0, needed]
+  end
+
+  def self.campaign_team_ready?
+    team = campaign_gym_team
     return false if team.length < campaign_gym_party_size
     cap = campaign_target_level
     team.each do |pkmn|
@@ -176,6 +190,122 @@ module PIFBot
     return false
   rescue Exception
     return false
+  end
+
+  def self.campaign_training_encounter_tile?(x, y)
+    return false if !$game_map
+    return false if !safe_value(false) { $game_map.valid?(x, y) }
+
+    terrain = safe_value(nil) { $game_map.terrain_tag(x, y) }
+    return false if !terrain
+    return false if safe_value(false) { terrain.ice }
+
+    # Match Infinite Fusion's encounter_possible_here? logic: cave maps can
+    # encounter on ordinary walkable tiles; land maps require a terrain tag
+    # explicitly marked for land wild encounters.
+    return true if safe_value(false) { $PokemonEncounters.has_cave_encounters? }
+    return safe_value(false) { terrain.land_wild_encounters }
+  rescue Exception
+    return false
+  end
+
+  def self.campaign_current_tile_has_encounters?
+    return false if !$game_player
+    return campaign_training_encounter_tile?($game_player.x, $game_player.y)
+  end
+
+  def self.campaign_path_to_nearest_encounter_tile(exclude_current = false)
+    return nil if !$game_map || !$game_player
+    map_id = $game_map.map_id
+    start = [map_id, $game_player.x, $game_player.y]
+    return [] if !exclude_current && campaign_training_encounter_tile?(start[1], start[2])
+
+    queue = [start]
+    head = 0
+    parent = { center_state_key(start) => nil }
+    direction_from_parent = {}
+    visited = 0
+    max_nodes = 6000
+
+    while head < queue.length && visited < max_nodes
+      current = queue[head]
+      head += 1
+      visited += 1
+
+      [2, 4, 6, 8].each do |direction|
+        neighbor = center_neighbor(current, direction, [map_id], nil)
+        next if !neighbor || neighbor[0] != map_id
+        nkey = center_state_key(neighbor)
+        next if parent.has_key?(nkey)
+
+        parent[nkey] = center_state_key(current)
+        direction_from_parent[nkey] = direction
+
+        if campaign_training_encounter_tile?(neighbor[1], neighbor[2])
+          directions = []
+          walk = nkey
+          while parent[walk]
+            directions.unshift(direction_from_parent[walk])
+            walk = parent[walk]
+          end
+          return directions
+        end
+        queue.push(neighbor)
+      end
+    end
+    return nil
+  rescue Exception => e
+    append_action_log("ERROR", "training grass path: #{e.class}: #{e.message}")
+    return nil
+  end
+
+  def self.campaign_training_choose_direction
+    return nil if !$game_player
+
+    # If a route transition or battle leaves us off encounter terrain, walk
+    # directly back to the nearest encounter-capable tile instead of wandering
+    # around pavement while "grinding".
+    if !campaign_current_tile_has_encounters?
+      if !@campaign_training_path || @campaign_training_path.length == 0
+        @campaign_training_path = campaign_path_to_nearest_encounter_tile(false) || []
+        append_action_log(
+          "CAMPAIGN_TRAIN",
+          "seeking encounter terrain | path #{@campaign_training_path.length}"
+        ) if @campaign_training_path.length > 0
+      end
+      return @campaign_training_path.shift if @campaign_training_path.length > 0
+      return nil
+    end
+
+    @campaign_training_path = []
+
+    directions = [2, 4, 6, 8]
+    grass_safe = directions.select do |dir|
+      next false if !navigation_safe_direction?(dir)
+      xy = navigation_destination($game_player.x, $game_player.y, dir)
+      campaign_training_encounter_tile?(xy[0], xy[1])
+    end
+
+    if grass_safe.length > 0
+      rotated = directions.rotate((@nav_steps || 0) % directions.length)
+      grass_safe.sort_by! do |dir|
+        xy = navigation_destination($game_player.x, $game_player.y, dir)
+        visits = @nav_visit_counts[navigation_tile_key(xy[0], xy[1])] || 0
+        straight = (dir == @nav_last_direction) ? 0 : 1
+        [visits, straight, rotated.index(dir) || 99]
+      end
+      return grass_safe[0]
+    end
+
+    # Rare isolated grass tile: find another encounter tile, allowing a short
+    # connector across non-grass only when staying in the current patch is
+    # impossible.
+    @campaign_training_path = campaign_path_to_nearest_encounter_tile(true) || []
+    return @campaign_training_path.shift if @campaign_training_path.length > 0
+    return nil
+  rescue Exception => e
+    append_action_log("ERROR", "training direction: #{e.class}: #{e.message}")
+    return nil
   end
 
   def self.campaign_find_nearest_training_map(start_map = nil)
@@ -622,6 +752,7 @@ module PIFBot
 
     if materially_different && campaign_apply_owned_team(selected)
       @campaign_expand_until_owned_count = nil
+      @campaign_expansion_reason = nil
       @campaign_gym_losses = 0
       @campaign_phase = :training
       append_action_log("CAMPAIGN_TEAM", "materially different owned team selected; retraining to cap")
@@ -632,6 +763,7 @@ module PIFBot
     # broaden the collection before the next review. Capture scoring sees this
     # flag and accepts new non-duplicate roster options more readily.
     @campaign_expand_until_owned_count = campaign_owned_count + CAMPAIGN_EXPANSION_CATCH_TARGET
+    @campaign_expansion_reason = :post_losses
     @campaign_gym_losses = 0
     @campaign_phase = :training
     append_action_log(
@@ -722,6 +854,8 @@ module PIFBot
       f.write("Gym party size: #{campaign_gym_party_size}\n")
       f.write("Gym losses: #{@campaign_gym_losses || 0}/#{CAMPAIGN_REBUILD_LOSS_LIMIT}\n")
       f.write("Roster expansion active: #{campaign_expanding_roster?}\n")
+      f.write("Roster expansion reason: #{@campaign_expansion_reason || "none"}\n")
+      f.write("On encounter terrain: #{campaign_current_tile_has_encounters?}\n")
       f.write("Owned Pokemon: #{campaign_owned_count}\n")
       f.write("Route goal map: #{@campaign_route_goal_map || "none"}\n")
       f.write("Route remaining steps: #{(@campaign_route_path || []).length}\n")
@@ -766,6 +900,8 @@ module PIFBot
     @campaign_current_battle_gym_leader = false
     @campaign_last_badge_count = safe_value(0) { $Trainer.badge_count }
     @campaign_required_gym_party_size = nil
+    @campaign_expansion_reason = nil
+    @campaign_training_path = []
 
     @nav_capture_history_offset = begin
       File.exist?(CAPTURE_HISTORY_PATH) ? File.size(CAPTURE_HISTORY_PATH) : 0
@@ -935,6 +1071,8 @@ module PIFBot
         @campaign_target_gym_map = nil
         @campaign_training_map = nil
         @campaign_required_gym_party_size = nil
+        @campaign_expansion_reason = nil
+        @campaign_training_path = []
         @campaign_phase = nil
       else
         return
@@ -957,6 +1095,7 @@ module PIFBot
     required_party = campaign_gym_party_size
     if campaign_owned_count < required_party
       @campaign_expand_until_owned_count = required_party
+      @campaign_expansion_reason = :gym_minimum
       append_action_log(
         "CAMPAIGN_TEAM",
         "next Gym requires #{required_party} Pokemon; owned #{campaign_owned_count}; collecting unique options"
@@ -970,8 +1109,18 @@ module PIFBot
 
     if @campaign_expand_until_owned_count &&
        campaign_owned_count >= @campaign_expand_until_owned_count
-      @campaign_phase = :rebuild_team
-      return
+      if @campaign_expansion_reason == :gym_minimum
+        append_action_log(
+          "CAMPAIGN_TEAM",
+          "minimum Gym roster reached at #{campaign_owned_count}; stop catching and train the Gym team"
+        )
+        @campaign_expand_until_owned_count = nil
+        @campaign_expansion_reason = nil
+        @campaign_phase = nil
+      else
+        @campaign_phase = :rebuild_team
+        return
+      end
     end
 
     return if [:travel_training, :travel_gym, :gym].include?(@campaign_phase)
@@ -1057,7 +1206,7 @@ module PIFBot
         campaign_refresh_phase
         return
       end
-      direction = navigation_choose_direction
+      direction = campaign_training_choose_direction
       if direction
         navigation_move(direction)
       else
