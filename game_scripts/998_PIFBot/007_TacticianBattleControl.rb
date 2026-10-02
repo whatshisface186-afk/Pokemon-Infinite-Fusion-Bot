@@ -8,7 +8,7 @@
 # - Automatically chooses and registers legal moves using Tactician's
 #   player-knowledge decision advisor.
 # - Automatically chooses a legal replacement after a faint/forced switch.
-# - Runs from wild battles when no legal move can deal visible direct damage.
+# - In wild battles, switches to a teammate that can deal damage; runs only if the whole usable team cannot.
 # - Does NOT yet make voluntary tactical switches, use bag items, catch Pokemon,
 #   or make fusion/team-management decisions.
 #
@@ -83,6 +83,76 @@ module PIFBot
     return ret
   end
 
+  # Returns the best known direct-damage option a party Pokemon has against
+  # the visible target. Bench Pokemon are evaluated from their known moves,
+  # remaining PP and visible type matchup only.
+  def self.party_pokemon_damage_option(pkmn, target_pkmn)
+    return nil if !pkmn || safe_value(true) { pkmn.fainted? }
+
+    best = nil
+    safe_value([]) { pkmn.moves }.each_with_index do |move, move_index|
+      next if !move
+      next if safe_value(0) { move.pp } <= 0
+
+      data = safe_value(nil) { GameData::Move.get(move.id) }
+      next if !data
+      next if data.category == 2   # Status move; cannot directly hurt the foe.
+
+      type_mult = visible_type_multiplier(data.type, target_pkmn)
+      next if type_mult <= 0.0
+
+      # This is only for deciding whether damage is possible and which bench
+      # Pokemon is the most useful emergency switch. It is deliberately simple.
+      power = safe_value(1) { data.base_damage }
+      power = 1 if power <= 0   # Fixed/special damaging functions still count.
+      stab = safe_value([]) { pkmn.types }.include?(data.type) ? 1.5 : 1.0
+      accuracy = (data.accuracy && data.accuracy > 0) ? data.accuracy / 100.0 : 1.0
+      potential = power * type_mult * stab * accuracy
+
+      entry = {
+        :move_index => move_index,
+        :move_name => safe_value("unknown") { move.name },
+        :type_mult => type_mult,
+        :potential => potential
+      }
+      best = entry if !best || entry[:potential] > best[:potential]
+    end
+    return best
+  rescue Exception
+    return nil
+  end
+
+  # Finds a legal teammate switch that can deal visible direct damage.
+  # Returns nil if no switchable, non-fainted teammate has such a move.
+  def self.best_team_damage_switch(battle, idx_battler, target)
+    return nil if !battle || !target || !target.pokemon
+
+    party = safe_value([]) { battle.pbParty(idx_battler) }
+    best = nil
+
+    party.each_with_index do |pkmn, party_index|
+      next if !pkmn || safe_value(true) { pkmn.fainted? }
+      next if !safe_value(false) { battle.pbCanSwitch?(idx_battler, party_index) }
+
+      damage = party_pokemon_damage_option(pkmn, target.pokemon)
+      next if !damage
+
+      entry = {
+        :party_index => party_index,
+        :pokemon => pkmn,
+        :damage => damage
+      }
+      if !best || damage[:potential] > best[:damage][:potential]
+        best = entry
+      end
+    end
+
+    return best
+  rescue Exception => e
+    append_action_log("ERROR", "team damage scan: #{e.class}: #{e.message}")
+    return nil
+  end
+
   def self.choose_tactician_command(battle, idx_battler)
     user = safe_value(nil) { battle.battlers[idx_battler] }
     return false if !user || !user.pokemon || user.fainted?
@@ -132,10 +202,10 @@ module PIFBot
       end
     end
 
-    # If this is a wild battle and Tactician has no legal move that can
-    # currently deal visible direct damage, running is better than endlessly
-    # spending turns on Leer/other status moves. This uses only the same
-    # player-knowledge matchup information as the decision advisor.
+    # If the active Pokemon cannot deal visible direct damage, scan the whole
+    # usable team before deciding to flee. In wild battles:
+    #   1) switch to a teammate that can hurt the foe, if one is legally usable;
+    #   2) only run if nobody on the usable team can hurt it.
     damage_candidates = candidates.select do |entry|
       advice = entry[0]
       advice[:expected_damage] && advice[:expected_damage] > 0.0 &&
@@ -146,9 +216,27 @@ module PIFBot
        visible_opponent &&
        damage_candidates.length == 0
       opponent_name = safe_value("unknown") { visible_opponent.name }
+      team_switch = best_team_damage_switch(battle, idx_battler, visible_opponent)
+
+      if team_switch
+        switched = safe_value(false) {
+          battle.pbRegisterSwitch(idx_battler, team_switch[:party_index])
+        }
+        if switched
+          append_action_log(
+            "SWITCH_NO_DAMAGE",
+            "#{safe_value("unknown") { user.name }} cannot hurt #{opponent_name}; " +
+            "switching to #{safe_value("unknown") { team_switch[:pokemon].name }} " +
+            "which can use #{team_switch[:damage][:move_name]} " +
+            "(effectiveness #{format("%.2f", team_switch[:damage][:type_mult])}x)"
+          )
+          return true
+        end
+      end
+
       append_action_log(
         "RUN",
-        "#{safe_value("unknown") { user.name }} -> no usable damaging move against #{opponent_name}; attempting escape"
+        "no usable team member can deal visible direct damage to #{opponent_name}; attempting escape"
       )
 
       run_result = safe_value(0) { battle.pbRun(idx_battler) }
