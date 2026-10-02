@@ -48,15 +48,36 @@ module PIFBot
     centers = safe_value(nil) { $PokemonGlobal.pifbot_known_centers }
     centers = [] if !centers.is_a?(Array)
 
-    # Backward-compatible fallback: Infinite Fusion already remembers the last
-    # registered Pokemon Center location in these save fields.
+    # Prefer Infinite Fusion's map-metadata healing destination. This is the
+    # overworld-style recovery/fly target and is often a better WALKING target
+    # than pokecenterMapId, which can point at an interior/common Center map.
+    healing = safe_value(nil) { $PokemonGlobal.healingSpot }
+    if healing.is_a?(Array) && healing.length >= 3
+      healing_center = {
+        :map_id => healing[0],
+        :x => healing[1],
+        :y => healing[2],
+        :direction => 2,
+        :source => :healing_spot
+      }
+      if healing_center[:map_id] && healing_center[:map_id] >= 0 &&
+         healing_center[:x] && healing_center[:y] &&
+         !centers.any? { |cc| center_key(cc) == center_key(healing_center) }
+        centers = [healing_center] + centers
+      end
+    end
+
+    # Backward-compatible fallback: Infinite Fusion also remembers the last
+    # registered Pokemon Center location in these save fields. This may be an
+    # interior map, so it is considered after healingSpot.
     fallback_map = safe_value(-1) { $PokemonGlobal.pokecenterMapId }
     if fallback_map && fallback_map >= 0
       fallback = {
         :map_id => fallback_map,
         :x => safe_value(-1) { $PokemonGlobal.pokecenterX },
         :y => safe_value(-1) { $PokemonGlobal.pokecenterY },
-        :direction => safe_value(2) { $PokemonGlobal.pokecenterDirection }
+        :direction => safe_value(2) { $PokemonGlobal.pokecenterDirection },
+        :source => :pokecenter
       }
       if fallback[:x] >= 0 && fallback[:y] >= 0 &&
          !centers.any? { |c| center_key(c) == center_key(fallback) }
@@ -75,7 +96,8 @@ module PIFBot
       :map_id => $game_map.map_id,
       :x => $game_player.x,
       :y => $game_player.y,
-      :direction => $game_player.direction
+      :direction => $game_player.direction,
+      :source => :observed_center
     }
 
     list = safe_value([]) { $PokemonGlobal.pifbot_known_centers }
