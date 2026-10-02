@@ -379,6 +379,16 @@ module PIFBot
   def self.navigation_handle_healing
     requested = respond_to?(:center_heal_requested?) && center_heal_requested?
     pkmn = navigation_low_hp_pokemon
+
+    # An emergency item used during campaign grinding no longer forces an
+    # immediate Center trip by itself. Keep grinding if the rest of the party
+    # is healthy; party-wide depletion/pre-Gym recovery is handled by pkmn.
+    if requested && respond_to?(:campaign_active?) && campaign_active? && !pkmn
+      append_action_log("CENTER_RETURN_DEFER", "single-Pokemon battle damage; healthy party depth remains")
+      clear_center_heal_request if respond_to?(:clear_center_heal_request)
+      requested = false
+    end
+
     return :not_needed if !requested && !pkmn
 
     reason = if requested && respond_to?(:center_heal_request_reason)
