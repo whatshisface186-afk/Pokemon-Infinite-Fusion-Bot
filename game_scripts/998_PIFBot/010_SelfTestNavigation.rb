@@ -41,7 +41,7 @@ module PIFBot
   @nav_action_log_offset = 0
   @nav_history_offset = 0
   @nav_randomizer_errors = 0
-  @nav_f10_ready = true
+  @nav_last_f10_trigger_at = 0.0
 
   def self.navigation_active?
     return @nav_active == true
@@ -49,28 +49,19 @@ module PIFBot
 
   def self.navigation_f10_triggered?
     begin
-      # Raw extended-key triggers can repeat while a function key is held.
-      # Require a physical release before another F10 toggle is accepted.
-      held_ms = safe_value(0) { Input.time?(NAV_KEY_CODE) }
-      if held_ms <= 0
-        @nav_f10_ready = true
-        return false
-      end
-
-      return false if @nav_f10_ready == false
       return false if !Input.triggerex?(NAV_KEY_CODE)
 
-      @nav_f10_ready = false
-      return true
-    rescue Exception
-      # Fallback: triggerex? alone, but guard against near-immediate repeats.
+      # Some Infinite Fusion input layers can emit more than one raw F-key edge
+      # from a single physical press. Use a simple cooldown instead of relying
+      # on Input.time? for raw virtual-key codes, which is not consistently
+      # exposed for F10.
       now = Time.now.to_f
       last = @nav_last_f10_trigger_at || 0.0
       return false if now - last < 1.5
-      if Input.triggerex?(NAV_KEY_CODE)
-        @nav_last_f10_trigger_at = now
-        return true
-      end
+
+      @nav_last_f10_trigger_at = now
+      return true
+    rescue Exception
       return false
     end
   end
