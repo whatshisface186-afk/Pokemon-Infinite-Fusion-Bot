@@ -11,6 +11,26 @@
 
 module PIFBot
   EMERGENCY_HEAL_RATIO = 0.40
+
+  @center_heal_requested = false
+
+  def self.request_center_heal(reason = "battle_damage")
+    @center_heal_requested = true
+    @center_heal_request_reason = reason
+  end
+
+  def self.center_heal_requested?
+    return @center_heal_requested == true
+  end
+
+  def self.center_heal_request_reason
+    return @center_heal_request_reason || "battle_damage"
+  end
+
+  def self.clear_center_heal_request
+    @center_heal_requested = false
+    @center_heal_request_reason = nil
+  end
   EMERGENCY_HEAL_TARGET_RATIO = 0.70
 
   EMERGENCY_HEALS = [
@@ -115,6 +135,7 @@ module PIFBot
     end
 
     if battle.pbRegisterItem(idx_battler, heal[:id], party_index, nil)
+      request_center_heal("emergency battle heal used")
       append_action_log(
         "EMERGENCY_HEAL",
         "#{safe_value("unknown") { user.name }} | HP #{safe_value("?") { user.hp }}/#{safe_value("?") { user.totalhp }} " +
