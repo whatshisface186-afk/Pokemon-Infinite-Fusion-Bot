@@ -175,6 +175,30 @@ module PIFBot
       return true
     end
 
+    # If this wild battle interrupted an active Pokemon Center trip, survival
+    # and reaching the Center take priority over grinding/catching. Emergency
+    # healing above already had first chance to act when HP is critical.
+    if safe_value(false) { battle.wildBattle? } &&
+       respond_to?(:center_return_active?) &&
+       center_return_active?
+      append_action_log(
+        "RUN_TO_CENTER",
+        "wild battle interrupted active Center trip; attempting escape"
+      )
+      run_result = safe_value(0) { battle.pbRun(idx_battler) }
+      if run_result != 0
+        append_action_log(
+          "RUN_TO_CENTER",
+          "escape resolved | result #{run_result}"
+        )
+        return true
+      end
+      append_action_log(
+        "RUN_TO_CENTER",
+        "escape failed/unavailable; falling back to normal Tactician action for this turn"
+      )
+    end
+
     # Selective auto-capture is implemented in 012_AutoCapture.rb. Keep this
     # controller usable even if that optional layer fails to load.
     if visible_opponent &&
