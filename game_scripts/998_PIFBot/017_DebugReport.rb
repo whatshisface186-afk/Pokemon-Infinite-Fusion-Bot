@@ -158,7 +158,7 @@ module PIFBot
     file.write("Last direction: #{debug_safe("none") { instance_variable_get(:@nav_last_direction) }}\n")
     file.write("Stop reason: #{debug_safe("none") { instance_variable_get(:@nav_stop_reason) }}\n")
     file.write("Randomizer errors total: #{debug_safe(0) { instance_variable_get(:@nav_randomizer_errors) }}\n")
-    file.write("Randomizer consecutive streak: #{debug_safe(0) { instance_variable_get(:@nav_randomizer_error_streak) }}/#{debug_safe("?") { NAV_RANDOMIZER_ERROR_LIMIT }\n")
+    file.write("Randomizer consecutive streak: #{debug_safe(0) { instance_variable_get(:@nav_randomizer_error_streak) }}/#{debug_safe("?") { NAV_RANDOMIZER_ERROR_LIMIT }}\n")
 
     visits = debug_safe({}) { instance_variable_get(:@nav_visit_counts) || {} }
     file.write("Unique visited tiles: #{visits.length}\n")
