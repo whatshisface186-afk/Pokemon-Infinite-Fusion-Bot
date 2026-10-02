@@ -142,6 +142,11 @@ module PIFBot
     best = { :learn => false, :forget => nil, :before => before, :after => before }
 
     current.each_index do |idx|
+      # Never erase an HM/field move automatically; those can be required for
+      # campaign progression later.
+      old_data = safe_value(nil) { GameData::Move.get(current[idx]) }
+      next if old_data && safe_value(false) { old_data.hidden_move? }
+
       candidate = current.dup
       candidate[idx] = new_move
       score = auto_move_set_score(pkmn, candidate)
