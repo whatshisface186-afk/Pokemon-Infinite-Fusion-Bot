@@ -25,10 +25,28 @@ module PIFBot
   CAMPAIGN_BALL_RESTOCK_MAP_SEARCH_LIMIT = 100
   CAMPAIGN_BALL_RESTOCK_MAP_HOP_LIMIT = 18
 
+  # Infinite Fusion's Kanto/common-Mart exit table. These are the exterior city
+  # maps that contain the corresponding enter_pokemart event. Off-screen RPG
+  # map events do not expose the same live event list as the current Game_Map,
+  # so use the game's own stable city map IDs for discovery and inspect the
+  # actual entrance event only after arriving.
+  CAMPAIGN_KANTO_MART_ENTRANCES = {
+    :PEWTER     => [380, 43, 24],
+    :CERULEAN   => [1, 24, 22],
+    :VERMILLION => [19, 32, 13],
+    :LAVENDER   => [50, 20, 23],
+    :CELADON    => [95, 18, 15],
+    :FUCHSIA    => [472, 7, 17],
+    :SAFFRON    => [108, 53, 24],
+    :CINNABAR   => [98, 30, 30]
+  }
+
   @campaign_ball_restock_active = false
   @campaign_ball_restock_phase = nil
   @campaign_ball_restock_resume_map = nil
   @campaign_ball_restock_mart_map = nil
+  @campaign_ball_restock_mart_city = nil
+  @campaign_ball_restock_mart_source = nil
   @campaign_ball_restock_event_id = nil
   @campaign_ball_restock_path = []
   @campaign_ball_restock_tried_shop_events = {}
@@ -73,6 +91,8 @@ module PIFBot
     @campaign_ball_restock_phase = nil
     @campaign_ball_restock_resume_map = nil
     @campaign_ball_restock_mart_map = nil
+    @campaign_ball_restock_mart_city = nil
+    @campaign_ball_restock_mart_source = nil
     @campaign_ball_restock_event_id = nil
     @campaign_ball_restock_path = []
     @campaign_ball_restock_tried_shop_events = {}
@@ -130,42 +150,66 @@ module PIFBot
     return false
   end
 
+  def self.campaign_known_mart_candidates(start_map)
+    candidates = []
+    CAMPAIGN_KANTO_MART_ENTRANCES.each do |city, entry|
+      map_id = entry[0]
+      route = safe_value(nil) { center_map_route(start_map, map_id) }
+      next if !route
+      next if route.length - 1 > CAMPAIGN_BALL_RESTOCK_MAP_HOP_LIMIT
+      candidates.push({
+        :city => city,
+        :map_id => map_id,
+        :hops => route.length - 1,
+        :x => entry[1],
+        :y => entry[2]
+      })
+    end
+    candidates.sort_by! { |entry| [entry[:hops], entry[:map_id]] }
+    return candidates
+  rescue Exception
+    return []
+  end
+
   def self.campaign_find_nearest_mart_map(start_map = nil)
     start_map ||= safe_value(nil) { $game_map.map_id }
     return nil if !start_map
 
     center_reset_plan_cache if respond_to?(:center_reset_plan_cache)
-    queue = [[start_map, 0]]
-    seen = { start_map => true }
-    head = 0
 
-    while head < queue.length && seen.length <= CAMPAIGN_BALL_RESTOCK_MAP_SEARCH_LIMIT
-      current, hops = queue[head]
-      head += 1
+    # First use Infinite Fusion's own known Kanto Mart exterior maps. This fixes
+    # the original implementation, which tried to read live event lists from
+    # off-screen maps and therefore could not "see" Pewter's Mart from Route 3.
+    known = campaign_known_mart_candidates(start_map)
+    known.each do |entry|
+      path = safe_value(nil) { campaign_plan_path_to_map(entry[:map_id]) }
+      next if !path
 
-      if campaign_map_has_mart_entrance?(current)
-        map_name = safe_value("Map #{current}") {
-          respond_to?(:campaign_training_map_name) ?
-            campaign_training_map_name(current) : "Map #{current}"
-        }
-        append_action_log(
-          "BALL_RESTOCK",
-          "nearest Mart entrance map #{map_name} (#{current}) | #{hops} map hops"
-        )
-        return current
-      end
+      append_action_log(
+        "BALL_RESTOCK",
+        "selected known Mart #{entry[:city]} | map #{entry[:map_id]} | " +
+        "#{entry[:hops]} map hops | #{path.length} walking steps"
+      )
+      @campaign_ball_restock_mart_city = entry[:city]
+      @campaign_ball_restock_mart_source = :known_game_table
+      return entry[:map_id]
+    end
 
-      next if hops >= CAMPAIGN_BALL_RESTOCK_MAP_HOP_LIMIT
-      center_map_neighbors(current).each do |neighbor|
-        next if seen[neighbor]
-        seen[neighbor] = true
-        queue.push([neighbor, hops + 1])
-      end
+    # Fallback: if a future/custom map is currently loaded and visibly contains
+    # a Mart entrance event, it is safe to use it directly.
+    if campaign_map_has_mart_entrance?(start_map)
+      append_action_log(
+        "BALL_RESTOCK",
+        "selected current-map Mart entrance | map #{start_map}"
+      )
+      @campaign_ball_restock_mart_city = nil
+      @campaign_ball_restock_mart_source = :current_map_event
+      return start_map
     end
 
     append_action_log(
       "BALL_RESTOCK",
-      "no reachable Mart entrance found within #{CAMPAIGN_BALL_RESTOCK_MAP_HOP_LIMIT} map hops"
+      "no route to known Mart maps from map #{start_map}"
     )
     return nil
   rescue Exception => e
