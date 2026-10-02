@@ -24,7 +24,7 @@ module PIFBot
   NAV_TARGET_WILD_BATTLES = 10
   NAV_MAX_STEPS = 1500
   NAV_RANDOMIZER_ERROR_LIMIT = 3
-  NAV_CENTER_RETURN_BELOW_RATIO = 0.60
+  NAV_CENTER_RETURN_BELOW_RATIO = 0.70
   NAV_KEY_CODE = 0x79   # F10
 
   @nav_active = false
@@ -308,16 +308,26 @@ module PIFBot
   end
 
   def self.navigation_handle_healing
+    requested = respond_to?(:center_heal_requested?) && center_heal_requested?
     pkmn = navigation_low_hp_pokemon
-    return :not_needed if !pkmn
+    return :not_needed if !requested && !pkmn
+
+    reason = if requested && respond_to?(:center_heal_request_reason)
+               center_heal_request_reason
+             elsif pkmn
+               "#{safe_value("unknown") { pkmn.name }} below #{(NAV_CENTER_RETURN_BELOW_RATIO * 100).to_i}% HP"
+             else
+               "party needs healing"
+             end
 
     if respond_to?(:begin_center_return) && begin_center_return(pkmn)
+      append_action_log("CENTER_RETURN", "armed immediately | #{reason}")
       return :center_return
     end
 
     append_action_log(
       "CENTER_RETURN",
-      "#{safe_value("unknown") { pkmn.name }} is below #{(NAV_CENTER_RETURN_BELOW_RATIO * 100).to_i}% HP but no reachable known Pokemon Center is available"
+      "requested (#{reason}) but no reachable known Pokemon Center is available"
     )
     navigation_stop("low_hp_no_reachable_center")
     return :stopped
@@ -499,6 +509,7 @@ module PIFBot
       f.write("  - uses native passability/collision\n")
       f.write("  - pauses for menus/messages/scripts/battles\n")
       f.write("  - returns to a known reachable Pokemon Center below #{(NAV_CENTER_RETURN_BELOW_RATIO * 100).to_i}% HP\n")
+      f.write("  - any emergency in-battle heal forces a Center trip after the battle\n")
       f.write("  - does not spend healing items in the overworld\n")
       f.write("  - stops after #{NAV_TARGET_WILD_BATTLES} wild battles\n")
     end
