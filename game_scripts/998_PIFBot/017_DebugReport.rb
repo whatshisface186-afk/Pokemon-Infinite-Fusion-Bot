@@ -25,8 +25,10 @@ module PIFBot
     ["Capture advisor",        "Data/pif_bot_capture.txt"],
     ["Battle control",         "Data/pif_bot_control.txt"],
     ["Team style",             "Data/pif_bot_team_style.txt"],
+    ["Campaign status",        "Data/pif_bot_campaign.txt"],
+    ["Campaign team review",   "Data/pif_bot_team_review.txt"],
     ["Navigation status",      "Data/pif_bot_navigation.txt"],
-    ["Autonomous run summary", "Data/pif_bot_test_summary.txt"]
+    ["Campaign session summary","Data/pif_bot_test_summary.txt"]
   ]
 
   def self.debug_safe(default_value = nil)
@@ -98,7 +100,7 @@ module PIFBot
     file.write("Generated: #{Time.now}\n")
     file.write("Reason: #{reason}\n")
     file.write("Tactician control: #{debug_safe("unknown") { tactician_auto_control? ? "ON" : "MANUAL" }}\n")
-    file.write("F10 navigation active: #{debug_safe(false) { navigation_active? }}\n")
+    file.write("F10 campaign active: #{debug_safe(false) { navigation_active? }}\n")
     file.write("F10 pending stop: #{debug_safe(false) { instance_variable_get(:@nav_pending_stop) == true }}\n")
     file.write("Center return active: #{debug_safe(false) { center_return_active? }}\n")
     file.write("Center heal requested: #{debug_safe(false) { center_heal_requested? }}\n")
@@ -127,8 +129,14 @@ module PIFBot
 
   def self.debug_navigation_section(file)
     debug_write_heading(file, "AUTONOMOUS NAVIGATION STATE")
-    file.write("Wild battles: #{debug_safe(0) { instance_variable_get(:@nav_wild_battles) }}/#{debug_safe("?") { NAV_TARGET_WILD_BATTLES }}\n")
-    file.write("Steps: #{debug_safe(0) { instance_variable_get(:@nav_steps) }}/#{debug_safe("?") { NAV_MAX_STEPS }}\n")
+    file.write("Campaign phase: #{debug_safe("none") { instance_variable_get(:@campaign_phase) }}\n")
+    file.write("Wild battles this session: #{debug_safe(0) { instance_variable_get(:@nav_wild_battles) }}\n")
+    file.write("Steps this session: #{debug_safe(0) { instance_variable_get(:@nav_steps) }}\n")
+    file.write("Next Gym: #{debug_safe("none") { campaign_next_gym ? campaign_next_gym[:leader] : "none" }}\n")
+    file.write("Target level: #{debug_safe("?") { campaign_target_level }}\n")
+    file.write("Gym losses: #{debug_safe(0) { instance_variable_get(:@campaign_gym_losses) }}/#{debug_safe("?") { CAMPAIGN_REBUILD_LOSS_LIMIT }}\n")
+    file.write("Campaign route goal map: #{debug_safe("none") { instance_variable_get(:@campaign_route_goal_map) }}\n")
+    file.write("Campaign route remaining: #{debug_safe([]) { instance_variable_get(:@campaign_route_path) || [] }.length}\n")
     file.write("Start map ID: #{debug_safe("none") { instance_variable_get(:@nav_start_map_id) }}\n")
     file.write("Start map name: #{debug_safe("none") { instance_variable_get(:@nav_start_map_name) }}\n")
     file.write("Last direction: #{debug_safe("none") { instance_variable_get(:@nav_last_direction) }}\n")
