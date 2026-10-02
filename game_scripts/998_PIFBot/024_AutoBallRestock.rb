@@ -461,7 +461,6 @@ module PIFBot
         @campaign_ball_restock_event_id = nil
         @campaign_ball_restock_interaction = nil
         @campaign_ball_restock_path = []
-        @campaign_ball_restock_interaction = nil
         event.start
         append_action_log(
           "BALL_RESTOCK",
@@ -670,6 +669,7 @@ module PIFBot
     @campaign_ball_restock_mart_city = nil
     @campaign_ball_restock_mart_source = nil
     @campaign_ball_restock_event_id = nil
+    @campaign_ball_restock_interaction = nil
     @campaign_ball_restock_path = []
     @campaign_ball_restock_tried_shop_events = {}
     @campaign_ball_restock_next_retry_battle =
@@ -744,6 +744,7 @@ module PIFBot
       if $game_map.map_id == mart_interior
         @campaign_ball_restock_phase = :shop
         @campaign_ball_restock_event_id = nil
+        @campaign_ball_restock_interaction = nil
         @campaign_ball_restock_path = []
         @campaign_ball_restock_tried_shop_events = {}
         return true
